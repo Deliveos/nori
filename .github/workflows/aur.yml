@@ -7,6 +7,14 @@ on:
     paths:
       - 'dist/arch/**'
       - '.github/workflows/aur.yml'
+      # What package() installs, and what the --locked/--frozen build and the
+      # completions depend on. ci.yml covers the rest of the code.
+      - 'resources/**'
+      - 'README.md'
+      - 'Cargo.toml'
+      - '*/Cargo.toml'
+      - 'Cargo.lock'
+      - 'src/cli.rs'
   workflow_dispatch:
   schedule:
     - cron: '0 0 1 * *' # Monthly
@@ -14,6 +22,9 @@ on:
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
 
 jobs:
   nori-git:
@@ -31,6 +42,8 @@ jobs:
           # pkgver() counts the commits.
           fetch-depth: 0
           show-progress: false
+          # The build runs code from the pull request with sudo.
+          persist-credentials: false
 
       # makepkg refuses to run as root.
       - name: Create the build user
@@ -55,8 +68,24 @@ jobs:
           cd "$build"
           sudo -u builder makepkg --syncdeps --noconfirm
 
+          # makepkg only warns when the package refers to $srcdir; fail instead.
+          status=0
+          grep -aRlF "$build/src" "$build/pkg" || status=$?
+          case $status in
+            0) echo 'The files above refer to the build directory'; exit 1 ;;
+            1) ;;
+            *) exit "$status" ;;
+          esac
+
       - name: Run namcap
-        run: namcap /tmp/nori-git/nori-git-*.pkg.tar.zst
+        shell: bash
+        run: |
+          namcap /tmp/nori-git/nori-git-*.pkg.tar.zst | tee namcap.log
+          # namcap exits with status 0 even when it reports errors.
+          if grep -q ' E: ' namcap.log; then
+            echo 'namcap reported errors'
+            exit 1
+          fi
 
       - name: Install the package and check it
         run: |
@@ -64,17 +93,13 @@ jobs:
           pacman -Ql nori-git
           nori --version
 
-          # makepkg only warns when the package refers to $srcdir; fail instead.
-          if grep -aq /tmp/nori-git/src /usr/bin/nori; then
-            echo '/usr/bin/nori refers to the build directory'
-            exit 1
-          fi
-
           # Panics must show file and line without a debug package (docs/wiki/Packaging-niri.md).
           if nori panic > panic.log 2>&1; then
             echo 'nori panic exited with status 0'
             exit 1
           fi
           cat panic.log
-          grep -q cause_panic panic.log
-          grep -qE 'src/utils/mod\.rs:[0-9]+' panic.log
+          # The backtrace frame of cause_panic must have a file and line. The
+          # panic message alone would show one even without line tables.
+          grep -A1 -E '[0-9]+: (.*::)?cause_panic$' panic.log |
+            grep -qE '^ +at /nori/src/.+\.rs:[0-9]+:[0-9]+$'

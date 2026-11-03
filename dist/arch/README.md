@@ -9,7 +9,7 @@ It installs the same files as the `niri` package in Arch's extra repository, und
 From the repository root:
 
 ```sh
-build=$(mktemp -d)
+build=$(mktemp -d -p /var/tmp nori-git.XXXXXX)
 cp dist/arch/nori-git/PKGBUILD "$build/"
 cd "$build"
 makepkg -si
@@ -17,23 +17,31 @@ makepkg -si
 
 makepkg clones `main` from GitHub; it doesn't build your local checkout.
 Building in a copy keeps the build files out of the checkout, and keeps makepkg from rewriting `pkgver=` in the tracked PKGBUILD.
+The build needs more than 2 GiB of disk space, so it runs in `/var/tmp`, which is on disk: on Arch, `/tmp` is a tmpfs limited to half of the RAM by default.
+Delete the build directory when you're done.
 
 ## Change the PKGBUILD
 
 1. Edit `dist/arch/nori-git/PKGBUILD`.
 2. Regenerate the metadata: `cd dist/arch/nori-git && makepkg --printsrcinfo > .SRCINFO`.
 3. Open a pull request.
-   The `AUR package` workflow builds the package from the pull request (GitHub's merge of it into `main`) in an Arch Linux container, checks that `.SRCINFO` is current, runs namcap, installs the package, checks that the binary has no build paths in it, and checks that `nori panic` prints file and line numbers.
+   The `AUR package` workflow builds the package from the pull request (GitHub's merge of it into `main`) in an Arch Linux container, checks that `.SRCINFO` is current, checks that the package has no build paths in it, fails on namcap errors, installs the package, and checks that `nori panic` prints file and line numbers.
+   It also runs when a pull request changes `resources/`, `README.md`, `src/cli.rs` or the Cargo files, and once a month.
 
 ## Publish to the AUR
 
 This needs an AUR account with an SSH key, and the package must be pushed from that account.
 Cloning a package name that doesn't exist yet gives an empty repository; the first push creates the package.
 
-From the repository root, with the AUR repository cloned next to the checkout:
+Run this from the repository root.
+The AUR repository lives next to the checkout, in `../aur-nori-git`; the first time, clone it, and later, update it:
 
 ```sh
-git clone ssh://aur@aur.archlinux.org/nori-git.git ../aur-nori-git
+if [ -d ../aur-nori-git ]; then
+  git -C ../aur-nori-git pull
+else
+  git clone ssh://aur@aur.archlinux.org/nori-git.git ../aur-nori-git
+fi
 cp dist/arch/nori-git/PKGBUILD dist/arch/nori-git/.SRCINFO ../aur-nori-git/
 cd ../aur-nori-git
 git add PKGBUILD .SRCINFO

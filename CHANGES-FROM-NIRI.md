@@ -558,7 +558,7 @@ niri does some bookkeeping on every iteration of its event loop, even when nothi
     Switching back to upstream smithay once the fixes are there is tracked in [#105](https://github.com/Deliveos/nori/issues/105).
 - **PKGBUILD for the AUR.**
     The `niri` package in Arch's extra repository and `niri-git` in the AUR build upstream niri.
-    nori keeps a PKGBUILD for `nori-git`, a package meant for the AUR (not published there yet), in `dist/arch/nori-git/`; it installs the same files as Arch's `niri` package under nori names, so the two don't conflict, and the `AUR package` workflow builds it in an Arch Linux container ([#271](https://github.com/Deliveos/nori/pull/271); fixes [#270](https://github.com/Deliveos/nori/issues/270)).
+    nori keeps a PKGBUILD for `nori-git`, a package meant for the AUR (not published there yet), in `dist/arch/nori-git/`; it installs the same files as Arch's `niri` package under nori names, so the two don't conflict, and the `AUR package` workflow builds it in an Arch Linux container ([#271](https://github.com/Deliveos/nori/pull/271), [#274](https://github.com/Deliveos/nori/pull/274); fixes [#270](https://github.com/Deliveos/nori/issues/270), [#273](https://github.com/Deliveos/nori/issues/273)).
 - The renamed packaging files and Nix flake attributes are listed under [Names](#names).
 
 ## Tests and CI
