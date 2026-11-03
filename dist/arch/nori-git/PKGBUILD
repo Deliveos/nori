@@ -50,7 +50,9 @@ b2sums=('SKIP')
 pkgver() {
   cd "$_pkgname"
   if git describe --long --tags --abbrev=7 >/dev/null 2>&1; then
-    git describe --long --tags --abbrev=7 | sed 's/^v//;s/\([^-]*-g\)/r\1/;s/-/./g'
+    # Drop any tag prefix (v26.05, nori-26.05), so that pkgver starts with the
+    # version and sorts above the r<count> versions from before the first tag.
+    git describe --long --tags --abbrev=7 | sed 's/^[^0-9]*//;s/\([^-]*-g\)/r\1/;s/-/./g'
   else
     printf 'r%s.%s' "$(git rev-list --count HEAD)" "$(git rev-parse --short=7 HEAD)"
   fi
@@ -71,7 +73,7 @@ build() {
   # Keep build paths out of the binary; backtraces then show /nori/src/...
   # The C flags cover the C code that libspa-sys compiles.
   export RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=$srcdir=/"
-  export CFLAGS="${CFLAGS:-} -ffile-prefix-map=$srcdir=/"
+  export CFLAGS="${CFLAGS:-} -ffile-prefix-map=$srcdir/=/"
   # Not --all: that would also build niri-visual-tests, which needs GTK 4.
   cargo build --frozen --release
 

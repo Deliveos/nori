@@ -35,6 +35,7 @@ niri-config/           config parsing (KDL)
 niri-ipc/              IPC types and helpers
 niri-visual-tests/     GTK app for checking rendering by eye (not run in CI tests)
 docs/wiki/             user and developer documentation
+dist/arch/             PKGBUILD for the nori-git package and how to publish it to the AUR
 ```
 
 ## 3. Golden rules
