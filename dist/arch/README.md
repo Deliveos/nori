@@ -38,9 +38,9 @@ The AUR repository lives next to the checkout, in `../aur-nori-git`; the first t
 
 ```sh
 if [ -d ../aur-nori-git ]; then
-  git -C ../aur-nori-git pull
+  git -C ../aur-nori-git pull --ff-only
 else
-  git clone ssh://aur@aur.archlinux.org/nori-git.git ../aur-nori-git
+  git -c init.defaultBranch=master clone ssh://aur@aur.archlinux.org/nori-git.git ../aur-nori-git
 fi
 cp dist/arch/nori-git/PKGBUILD dist/arch/nori-git/.SRCINFO ../aur-nori-git/
 cd ../aur-nori-git
@@ -48,6 +48,9 @@ git add PKGBUILD .SRCINFO
 git commit -m "Update PKGBUILD"
 git push origin HEAD:master
 ```
+
+When a package has no commits yet, git may not learn its default branch from the AUR, and then the clone uses your `init.defaultBranch`, for example `main`.
+That branch tracks a branch the AUR never has, so later pulls fail; `-c init.defaultBranch=master` makes the clone use `master`, the only branch the AUR accepts.
 
 The AUR only accepts pushes to `master`, needs `.SRCINFO` in the pushed commit and `PKGBUILD` in every commit, and rejects subdirectories other than `keys/` and `LICENSES/` (see `aurweb/git/update.py` in [aurweb](https://gitlab.archlinux.org/archlinux/aurweb)).
 Push to the AUR only what is merged into `main` here, so the two stay the same.

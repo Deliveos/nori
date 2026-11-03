@@ -7,8 +7,9 @@ on:
     paths:
       - 'dist/arch/**'
       - '.github/workflows/aur.yml'
-      # What package() installs, and what the --locked/--frozen build and the
-      # completions depend on. ci.yml covers the rest of the code.
+      # What package() installs, the --locked/--frozen build, and the CLI
+      # definition. ci.yml covers the rest of the code; its nix job also
+      # generates the completions.
       - 'resources/**'
       - 'README.md'
       - 'Cargo.toml'
@@ -70,7 +71,8 @@ jobs:
 
           # makepkg only warns when the package refers to $srcdir; fail instead.
           status=0
-          grep -aRlF "$build/src" "$build/pkg" || status=$?
+          # -r, not -R: don't follow symlinks out of the package.
+          grep -arlF "$build/src" "$build/pkg" || status=$?
           case $status in
             0) echo 'The files above refer to the build directory'; exit 1 ;;
             1) ;;
