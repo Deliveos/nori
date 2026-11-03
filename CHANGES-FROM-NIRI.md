@@ -6,7 +6,7 @@ Each entry links to the pull requests or commits that made the change and to the
 
 Pull requests that change how nori behaves compared with niri update this file in the same pull request (see [CONTRIBUTING.md](CONTRIBUTING.md#writing-pull-requests)).
 
-- **Upstream base:** nori contains upstream niri up to [9d8f4f8](https://github.com/niri-wm/niri/commit/9d8f4f89f6a075a04ed24af5f13829d0bdba5b85), merged in [#117](https://github.com/Deliveos/nori/pull/117) on 2026-10-26.
+- **Upstream base:** nori contains upstream niri up to [a8562a1](https://github.com/niri-wm/niri/commit/a8562a1126922ed4c1c94d34c1dbb26633491d05), merged in [#268](https://github.com/Deliveos/nori/pull/268).
     Later upstream commits are not in nori until the next merge (see [Upstream merges](#upstream-merges)).
 - **Older work:** the first fixes were made in an earlier repository and moved here in [#1](https://github.com/Deliveos/nori/pull/1).
     Their commit messages use that repository's issue and pull request numbers ("Fixes #N", "Merge pull request #N"), which don't match the numbers here.
@@ -577,9 +577,10 @@ The issue templates, the README and the contributing guides point at this reposi
 nori takes upstream niri in with merge pull requests, so upstream's history is kept.
 Upstream's own changes are not listed in this file.
 
-| Pull request | Upstream commits | Merged |
+| Pull request | Upstream commits | Opened |
 |---|---|---|
 | [#117](https://github.com/Deliveos/nori/pull/117) | [e19df12](https://github.com/niri-wm/niri/commit/e19df12cf81ffe805609fee497da1a097066ad2f)..[9d8f4f8](https://github.com/niri-wm/niri/commit/9d8f4f89f6a075a04ed24af5f13829d0bdba5b85) (18 commits) | 2026-10-26 |
+| [#268](https://github.com/Deliveos/nori/pull/268) | [9d8f4f8](https://github.com/niri-wm/niri/commit/9d8f4f89f6a075a04ed24af5f13829d0bdba5b85)..[a8562a1](https://github.com/niri-wm/niri/commit/a8562a1126922ed4c1c94d34c1dbb26633491d05) (20 commits) | 2026-11-03 |
 
 To see the upstream commits that nori doesn't have yet, run `git fetch https://github.com/niri-wm/niri main` and then `git log --oneline HEAD..FETCH_HEAD`.
 
