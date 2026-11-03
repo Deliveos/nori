@@ -556,6 +556,9 @@ niri does some bookkeeping on every iteration of its event loop, even when nothi
     nori builds them from [Deliveos/smithay](https://github.com/Deliveos/smithay) at `e4670d04`, on its `nori` branch: the same version plus the `xdg_positioner` fixes for [#90](https://github.com/Deliveos/nori/issues/90) and [#104](https://github.com/Deliveos/nori/issues/104), and the negative size fixes for [#128](https://github.com/Deliveos/nori/issues/128).
     Builds that fetch or vendor the dependencies, including the Nix flake, get smithay from there, so the pinned fork commits have to stay reachable from a branch or tag of the fork ([#101](https://github.com/Deliveos/nori/pull/101), [#122](https://github.com/Deliveos/nori/pull/122), [#266](https://github.com/Deliveos/nori/pull/266)).
     Switching back to upstream smithay once the fixes are there is tracked in [#105](https://github.com/Deliveos/nori/issues/105).
+- **PKGBUILD for the AUR.**
+    The `niri` package in Arch's extra repository and `niri-git` in the AUR build upstream niri.
+    nori keeps a PKGBUILD for `nori-git`, a package meant for the AUR (not published there yet), in `dist/arch/nori-git/`; it installs the same files as Arch's `niri` package under nori names, so the two don't conflict, and the `AUR package` workflow builds it in an Arch Linux container ([#271](https://github.com/Deliveos/nori/pull/271); fixes [#270](https://github.com/Deliveos/nori/issues/270)).
 - The renamed packaging files and Nix flake attributes are listed under [Names](#names).
 
 ## Tests and CI

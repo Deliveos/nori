@@ -1,0 +1,80 @@
+name: AUR package
+
+# Builds dist/arch/nori-git/PKGBUILD in an Arch Linux container, from the commit under test
+# instead of main, and checks the result.
+on:
+  pull_request:
+    paths:
+      - 'dist/arch/**'
+      - '.github/workflows/aur.yml'
+  workflow_dispatch:
+  schedule:
+    - cron: '0 0 1 * *' # Monthly
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  nori-git:
+    name: nori-git PKGBUILD
+    runs-on: ubuntu-24.04
+    container: archlinux:base-devel
+    timeout-minutes: 120
+
+    steps:
+      - name: Install git and namcap
+        run: pacman -Syu --noconfirm --needed git namcap
+
+      - uses: actions/checkout@v6
+        with:
+          # pkgver() counts the commits.
+          fetch-depth: 0
+          show-progress: false
+
+      # makepkg refuses to run as root.
+      - name: Create the build user
+        run: |
+          useradd --create-home builder
+          echo 'builder ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/builder
+          chown -R builder: "$GITHUB_WORKSPACE"
+
+      - name: Check that .SRCINFO matches the PKGBUILD
+        working-directory: dist/arch/nori-git
+        run: sudo -u builder makepkg --printsrcinfo | diff -u .SRCINFO -
+
+      - name: Build the package from this commit
+        run: |
+          build=/tmp/nori-git
+          mkdir "$build"
+          cp dist/arch/nori-git/PKGBUILD "$build/"
+          commit=$(sudo -u builder git -C "$GITHUB_WORKSPACE" rev-parse HEAD)
+          sed -i "s|^source=.*|source=(\"\$_pkgname::git+file://$GITHUB_WORKSPACE#commit=$commit\")|" "$build/PKGBUILD"
+          grep '^source=' "$build/PKGBUILD"
+          chown -R builder: "$build"
+          cd "$build"
+          sudo -u builder makepkg --syncdeps --noconfirm
+
+      - name: Run namcap
+        run: namcap /tmp/nori-git/nori-git-*.pkg.tar.zst
+
+      - name: Install the package and check it
+        run: |
+          pacman -U --noconfirm /tmp/nori-git/nori-git-*.pkg.tar.zst
+          pacman -Ql nori-git
+          nori --version
+
+          # makepkg only warns when the package refers to $srcdir; fail instead.
+          if grep -aq /tmp/nori-git/src /usr/bin/nori; then
+            echo '/usr/bin/nori refers to the build directory'
+            exit 1
+          fi
+
+          # Panics must show file and line without a debug package (docs/wiki/Packaging-niri.md).
+          if nori panic > panic.log 2>&1; then
+            echo 'nori panic exited with status 0'
+            exit 1
+          fi
+          cat panic.log
+          grep -q cause_panic panic.log
+          grep -qE 'src/utils/mod\.rs:[0-9]+' panic.log

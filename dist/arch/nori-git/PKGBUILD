@@ -1,0 +1,107 @@
+# Maintainer: Deliveos <https://github.com/Deliveos>
+
+pkgname=nori-git
+_pkgname=nori
+pkgver=r3293.7ba04a2
+pkgrel=1
+pkgdesc='Scrollable-tiling Wayland compositor, a fork of niri'
+arch=(x86_64 aarch64)
+url='https://github.com/Deliveos/nori'
+license=(GPL-3.0-or-later)
+depends=(
+  cairo
+  glib2
+  glibc
+  libdisplay-info
+  libgcc
+  libinput
+  libpipewire
+  libxkbcommon
+  mesa
+  pango
+  pixman
+  seatd
+  systemd-libs
+  wayland # libwayland-server is loaded at runtime
+  xdg-desktop-portal-impl
+)
+makedepends=(clang git rust)
+optdepends=(
+  'alacritty: terminal bound in the default config'
+  'bash: for the nori-session script'
+  'fuzzel: application launcher bound in the default config'
+  'mako: notification daemon'
+  'org.freedesktop.secrets: for apps that use the secret portal'
+  'swaybg: wallpaper tool'
+  'swaylock: screen locker bound in the default config'
+  'waybar: bar started by the default config'
+  'xdg-desktop-portal-gnome: required for screencasting'
+  'xdg-desktop-portal-gtk: fallback portal set in nori-portals.conf'
+  'xwayland-satellite: for running X11 apps'
+)
+provides=("$_pkgname=$pkgver" wayland-compositor)
+conflicts=("$_pkgname")
+# Keep the line tables from the release profile in the binary, so that panics
+# show file and line without a debug package (docs/wiki/Packaging-niri.md).
+options=(!debug !lto !strip)
+source=("$_pkgname::git+$url.git")
+b2sums=('SKIP')
+
+pkgver() {
+  cd "$_pkgname"
+  if git describe --long --tags --abbrev=7 >/dev/null 2>&1; then
+    git describe --long --tags --abbrev=7 | sed 's/^v//;s/\([^-]*-g\)/r\1/;s/-/./g'
+  else
+    printf 'r%s.%s' "$(git rev-list --count HEAD)" "$(git rev-parse --short=7 HEAD)"
+  fi
+}
+
+prepare() {
+  cd "$_pkgname"
+  export CARGO_HOME="$srcdir/cargo-home"
+  export RUSTUP_TOOLCHAIN=stable
+  cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+  cd "$_pkgname"
+  export CARGO_HOME="$srcdir/cargo-home"
+  export CARGO_TARGET_DIR=target
+  export RUSTUP_TOOLCHAIN=stable
+  # Keep build paths out of the binary; backtraces then show /nori/src/...
+  # The C flags cover the C code that libspa-sys compiles.
+  export RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=$srcdir=/"
+  export CFLAGS="${CFLAGS:-} -ffile-prefix-map=$srcdir=/"
+  # Not --all: that would also build niri-visual-tests, which needs GTK 4.
+  cargo build --frozen --release
+
+  for shell in bash fish zsh; do
+    target/release/nori completions "$shell" > "completions.$shell"
+  done
+}
+
+check() {
+  cd "$_pkgname"
+  export CARGO_HOME="$srcdir/cargo-home"
+  export CARGO_TARGET_DIR=target
+  export RUSTUP_TOOLCHAIN=stable
+  # makepkg runs check() in the same shell right after build(), so the RUSTFLAGS
+  # and CFLAGS from build() still apply. Adding the flags again here would change
+  # cargo's fingerprints and rebuild every dependency.
+  # Some tests use Rayon threads; limit them to stay under the fd limit on
+  # machines with many cores. The egl tests need a working EGL driver.
+  export RAYON_NUM_THREADS=2
+  cargo test --frozen --release --workspace --exclude niri-visual-tests -- --skip=::egl
+}
+
+package() {
+  cd "$_pkgname"
+  install -Dm755 target/release/nori resources/nori-session -t "$pkgdir/usr/bin/"
+  install -Dm644 resources/nori.desktop -t "$pkgdir/usr/share/wayland-sessions/"
+  install -Dm644 resources/nori-portals.conf -t "$pkgdir/usr/share/xdg-desktop-portal/"
+  install -Dm644 resources/nori.service resources/nori-shutdown.target -t "$pkgdir/usr/lib/systemd/user/"
+  install -Dm644 completions.bash "$pkgdir/usr/share/bash-completion/completions/nori"
+  install -Dm644 completions.fish "$pkgdir/usr/share/fish/vendor_completions.d/nori.fish"
+  install -Dm644 completions.zsh "$pkgdir/usr/share/zsh/site-functions/_nori"
+  install -Dm644 README.md resources/default-config.kdl -t "$pkgdir/usr/share/doc/nori/"
+}
