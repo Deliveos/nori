@@ -591,4 +591,4 @@ Open issues in nori's own changes:
 - [#105](https://github.com/Deliveos/nori/issues/105): keep the pinned smithay fork commits reachable, and switch back to upstream smithay.
 - [#58](https://github.com/Deliveos/nori/issues/58): keep the performance benchmarks in the repository.
 
-Problems found in upstream niri, or in the smithay version it uses, while working on nori, not fixed yet: [#154](https://github.com/Deliveos/nori/issues/154) (the smithay part).
+Problems found in upstream niri, or in the smithay version it uses, while working on nori, not fixed yet: [#154](https://github.com/Deliveos/nori/issues/154) (the smithay part), [#269](https://github.com/Deliveos/nori/issues/269) (switching VT waits for libseat on the main thread).
