@@ -1229,3 +1229,52 @@ fn held_window_cast_area_with_a_popup_subsurface_at_i32_min() {
     assert_eq!(mapped.window.bbox_with_popups(), logical);
     assert_eq!(cast_bbox(&mut f, (2560., 1440.)), rect(-640, 2560));
 }
+
+#[test]
+fn destroying_many_surfaces_takes_linear_time() {
+    use std::time::Duration;
+
+    use smithay::reexports::rustix::time::{clock_gettime, ClockId};
+
+    // The client and niri both run on this thread, so its CPU time is what their work costs; time
+    // when the thread isn't running doesn't count.
+    fn cpu_time() -> Duration {
+        let ts = clock_gettime(ClockId::ThreadCPUTime);
+        Duration::new(ts.tv_sec as u64, ts.tv_nsec as u32)
+    }
+
+    const COUNT: usize = 20_000;
+    // Roundtrip after each batch, so that the socket buffers don't fill up.
+    const BATCH: usize = 1000;
+
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+
+    let start = cpu_time();
+    let mut surfaces = Vec::with_capacity(COUNT);
+    for _ in 0..COUNT / BATCH {
+        for _ in 0..BATCH {
+            surfaces.push(f.client(id).state.create_surface());
+        }
+        f.roundtrip(id);
+    }
+    let create = cpu_time() - start;
+
+    let start = cpu_time();
+    for batch in surfaces.chunks(BATCH) {
+        for surface in batch {
+            surface.destroy();
+        }
+        f.roundtrip(id);
+    }
+    let destroy = cpu_time() - start;
+
+    // smithay kept every surface in a Vec and scanned it to remove each destroyed one, so
+    // destroying the surfaces took time quadratic in their number: in a debug build, more than 100
+    // times as long as creating them. With a set, it takes about as long as creating them.
+    assert!(
+        destroy < create * 10,
+        "destroying {COUNT} surfaces took {destroy:?}, creating them took {create:?}"
+    );
+}
