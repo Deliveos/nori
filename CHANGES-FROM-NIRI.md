@@ -37,6 +37,7 @@ Pull requests that change how nori behaves compared with niri update this file i
     - an IPC request line may be at most 8 MiB ([details](#ipc-request-limit));
     - at most 16 pastes of nori's own clipboard data (such as a copied screenshot) can be pending at once ([details](#clipboard-writer-threads));
     - a blur region with more than 64 rectangles is blurred over its bounding box ([details](#blur-region-cap));
+    - an opaque region with more than 16 rectangles is ignored, as if the client had set none ([details](#opaque-region-cap));
     - at most 16 wlr-gamma-control ramps can be read at once ([details](#gamma-reads));
     - configured output positions are clamped to ±16777216, and custom modes with zero timings are ignored ([details](#output-positions-and-custom-modes));
     - a window screencast covers at most an area the size of the window's output (rounded up to whole logical pixels, then out to whole physical pixels, so on each axis it can be larger than the output by fewer than the scale plus 2 physical pixels), also when the window itself is larger, and whatever lies outside that area is not cast ([details](#window-cast-size));
@@ -178,7 +179,7 @@ Entries added after these say in the entry itself where their test is, or that t
 
 ## Freeze and hang fixes
 
-The gamma, blur and suspend fixes follow rule 2 in [AGENTS.md](AGENTS.md#3-golden-rules): don't block the main thread.
+The gamma, blur, opaque region and suspend fixes follow rule 2 in [AGENTS.md](AGENTS.md#3-golden-rules): don't block the main thread.
 The xwayland-satellite fix bounds a wait on the main thread to 2 seconds.
 The spawn fix is about a background thread that never finished.
 
@@ -215,6 +216,14 @@ The spawn fix is about a background thread that never finished.
     niri converts an ext-background-effect blur region into non-overlapping rectangles on the render path, with no limit on the number of rectangles, and any client can use that protocol.
     In the issue's measurement, 4000 rectangles (about 100 KB of requests) took 9.8 seconds and produced 16 million rectangles.
     For regions with more than 64 rectangles (added and subtracted together), nori blurs the bounding box of the added rectangles instead, so holes in such a region are blurred too ([9a986ef6](https://github.com/Deliveos/nori/commit/9a986ef6e37cf5c325bd262edb64c68e82a38ea1); fixes [#7](https://github.com/Deliveos/nori/issues/7)).
+- <a id="opaque-region-cap"></a>**Opaque regions with many rectangles.**
+    Whenever a surface gets a new buffer or its surface view changes (a viewport, a subsurface position or the client scale), smithay cuts its opaque region into pieces, with no limit on the number of rectangles, and any client can set an opaque region.
+    The number of pieces can grow quadratically with the number of rectangles, and in measurements of a copy of that code, building them took time growing with between the 4th and the 5th power of the number of rectangles: 192 rectangles (64 added horizontal stripes, 64 subtracted vertical stripes, then 64 rectangles over the whole surface) took 2.1 seconds per commit in a release build.
+    On every frame, the damage tracker then subtracts the new pieces from the old ones: 128 added horizontal stripes and 128 subtracted vertical stripes made 16,290 pieces, and subtracting those pieces from themselves took about a quarter of a second in a release build.
+    nori ignores an opaque region with more than 16 rectangles (added and subtracted together), so that surface is drawn as if it had no opaque region; an opaque region is only a hint for optimizations, such as not drawing what is below the surface or putting it on a hardware plane.
+    The limit is per surface, but the damage tracker goes over the pieces of all visible surfaces together, and one 16-rectangle region can make hundreds of pieces (481 for 16 nested rectangles).
+    Measured on its own, the damage tracker's step that subtracts the new pieces from the old ones took 1.2 seconds per frame with 120-piece regions on 300 surfaces, and about 22 seconds with 481-piece regions on 300 surfaces, so that part of the issue is still open.
+    Tests in `src/tests/crash_regressions.rs` check the limit ([#277](https://github.com/Deliveos/nori/pull/277); part of [#182](https://github.com/Deliveos/nori/issues/182)).
 - **The suspend action.**
     niri calls logind's `Suspend` on the main thread over a new system bus connection and waits for the reply, so a slow system bus stalls the compositor, and with `interactive = true` logind can wait for polkit, whose authentication agent is a client of the stalled compositor.
     nori makes the call on a thread, and ignores further suspend actions while one call is still running ([#217](https://github.com/Deliveos/nori/pull/217); fixes [#185](https://github.com/Deliveos/nori/issues/185)).
@@ -594,4 +603,4 @@ Open issues in nori's own changes:
 - [#105](https://github.com/Deliveos/nori/issues/105): keep the pinned smithay fork commits reachable, and switch back to upstream smithay.
 - [#58](https://github.com/Deliveos/nori/issues/58): keep the performance benchmarks in the repository.
 
-Problems found in upstream niri, or in the smithay version it uses, while working on nori, not fixed yet: [#154](https://github.com/Deliveos/nori/issues/154) (the smithay part), [#269](https://github.com/Deliveos/nori/issues/269) (switching VT waits for libseat on the main thread).
+Problems found in upstream niri, or in the smithay version it uses, while working on nori, not fixed yet: [#154](https://github.com/Deliveos/nori/issues/154) (the smithay part), [#269](https://github.com/Deliveos/nori/issues/269) (switching VT waits for libseat on the main thread), [#182](https://github.com/Deliveos/nori/issues/182) (opaque regions on many surfaces, see [Opaque regions with many rectangles](#opaque-region-cap)), [#280](https://github.com/Deliveos/nori/issues/280) (every commit copies a surface's opaque and input regions, and a region has no size limit), [#281](https://github.com/Deliveos/nori/issues/281) (smithay's `subtract_rects_many_in_place` can skip rectangles).

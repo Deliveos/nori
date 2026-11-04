@@ -1,7 +1,10 @@
+use smithay::backend::renderer::utils::RendererSurfaceStateUserData;
 use smithay::reexports::wayland_protocols::xdg::shell::client::xdg_surface;
 use smithay::reexports::wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_shell_v1::Layer;
 use smithay::reexports::wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1;
 use smithay::reexports::wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1::Anchor;
+use smithay::wayland::compositor::{with_surface_tree_downward, TraversalAction};
+use wayland_client::protocol::wl_surface::WlSurface;
 use wayland_client::Proxy;
 
 use super::*;
@@ -631,4 +634,183 @@ fn huge_layer_surface_size() {
         layer.ack_last_and_commit();
         f.double_roundtrip(id);
     }
+}
+
+/// Sets an opaque region of `adds` separate 1×1 rects and `subtracts` 1×1 rects between them on
+/// `surface`, without committing.
+fn set_opaque_region(
+    f: &mut Fixture,
+    id: ClientId,
+    surface: &WlSurface,
+    adds: i32,
+    subtracts: i32,
+) {
+    let state = &mut f.client(id).state;
+    let region = state
+        .compositor
+        .as_ref()
+        .unwrap()
+        .create_region(&state.qh, ());
+    for i in 0..adds {
+        region.add(i % 50 * 4, i / 50 * 4, 1, 1);
+    }
+    // Subtracted rects that don't touch the added ones still count toward the limit.
+    for i in 0..subtracts {
+        region.subtract(i % 50 * 4 + 2, i / 50 * 4 + 2, 1, 1);
+    }
+    surface.set_opaque_region(Some(&region));
+    region.destroy();
+}
+
+/// Numbers of opaque pieces that smithay made for the first window's surface, then for its
+/// subsurfaces, with the position of each surface relative to its parent.
+fn opaque_pieces_and_offsets(f: &mut Fixture) -> Vec<(usize, (i32, i32))> {
+    let (_, mapped) = f.niri().layout.windows().next().unwrap();
+    let root = mapped.toplevel().wl_surface().clone();
+    let mut pieces = Vec::new();
+    with_surface_tree_downward(
+        &root,
+        (),
+        |_, _, _| TraversalAction::DoChildren(()),
+        |surface, states, _| {
+            let data = states.data_map.get::<RendererSurfaceStateUserData>();
+            let data = data.unwrap().lock().unwrap();
+            // Without a size, smithay reports no opaque pieces at all.
+            let view = data.view().expect("surface should have a buffer");
+            let count = data.opaque_regions().map_or(0, |pieces| pieces.len());
+            pieces.push((*surface != root, count, (view.offset.x, view.offset.y)));
+        },
+        |_, _, _| true,
+    );
+    pieces.sort_by_key(|(is_subsurface, _, _)| *is_subsurface);
+    pieces
+        .into_iter()
+        .map(|(_, count, offset)| (count, offset))
+        .collect()
+}
+
+/// Numbers of opaque pieces that smithay made for the first window's surface, then for its
+/// subsurfaces.
+fn opaque_pieces(f: &mut Fixture) -> Vec<usize> {
+    opaque_pieces_and_offsets(f)
+        .into_iter()
+        .map(|(count, _)| count)
+        .collect()
+}
+
+#[test]
+fn opaque_region_with_many_rects() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+
+    let window = f.client(id).create_window();
+    let surface = window.surface.clone();
+    window.commit();
+    f.roundtrip(id);
+    let window = f.client(id).window(&surface);
+    window.attach_new_buffer();
+    window.set_size(200, 200);
+    window.ack_last_and_commit();
+    f.double_roundtrip(id);
+
+    let commit_with_new_buffer = |f: &mut Fixture, adds, subtracts| {
+        set_opaque_region(f, id, &surface, adds, subtracts);
+        let window = f.client(id).window(&surface);
+        window.attach_new_buffer();
+        window.commit();
+        f.double_roundtrip(id);
+        opaque_pieces(f)
+    };
+
+    // Up to the limit, the opaque region is used.
+    assert_eq!(commit_with_new_buffer(&mut f, 16, 0), [16]);
+    // Past it, it's ignored: building its pieces can take a long time, and every frame goes over
+    // them.
+    assert_eq!(commit_with_new_buffer(&mut f, 17, 0), [0]);
+    assert_eq!(commit_with_new_buffer(&mut f, 2000, 0), [0]);
+    // Subtracted rects count too.
+    assert_eq!(commit_with_new_buffer(&mut f, 10, 6), [10]);
+    assert_eq!(commit_with_new_buffer(&mut f, 10, 7), [0]);
+
+    // The client's region stays set: a new buffer without a new region still doesn't use it.
+    let window = f.client(id).window(&surface);
+    window.attach_new_buffer();
+    window.commit();
+    f.double_roundtrip(id);
+    assert_eq!(opaque_pieces(&mut f), [0]);
+
+    // A new size without a new buffer also makes smithay build the pieces again, from a new
+    // region too.
+    assert_eq!(commit_with_new_buffer(&mut f, 16, 0), [16]);
+    set_opaque_region(&mut f, id, &surface, 17, 0);
+    let window = f.client(id).window(&surface);
+    window.set_size(150, 150);
+    window.commit();
+    f.double_roundtrip(id);
+    assert_eq!(opaque_pieces(&mut f), [0]);
+
+    // A smaller region afterwards is used again.
+    assert_eq!(commit_with_new_buffer(&mut f, 2, 0), [2]);
+}
+
+#[test]
+fn opaque_region_with_many_rects_on_sync_subsurface() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+
+    let window = f.client(id).create_window();
+    let surface = window.surface.clone();
+    window.commit();
+    f.roundtrip(id);
+    let window = f.client(id).window(&surface);
+    window.attach_new_buffer();
+    window.set_size(200, 200);
+    window.ack_last_and_commit();
+    f.double_roundtrip(id);
+
+    // A synchronized subsurface with a translucent 200 × 200 buffer.
+    let state = &mut f.client(id).state;
+    let child = state.create_surface();
+    let subsurface =
+        state
+            .subcompositor
+            .as_ref()
+            .unwrap()
+            .get_subsurface(&child, &surface, &state.qh, ());
+    let viewport = state
+        .viewporter
+        .as_ref()
+        .unwrap()
+        .get_viewport(&child, &state.qh, ());
+    viewport.set_destination(200, 200);
+
+    let commit_child = |f: &mut Fixture, adds| {
+        set_opaque_region(f, id, &child, adds, 0);
+        let state = &mut f.client(id).state;
+        let spbm = state.spbm.as_ref().unwrap();
+        let buffer = spbm.create_u32_rgba_buffer(0, 0, 0, 0, &state.qh, ());
+        child.attach(Some(&buffer), 0, 0);
+        child.commit();
+        // The subsurface's state applies when the parent commits.
+        f.client(id).window(&surface).commit();
+        f.double_roundtrip(id);
+        opaque_pieces(f)
+    };
+
+    assert_eq!(commit_child(&mut f, 16), [0, 16]);
+    assert_eq!(commit_child(&mut f, 17), [0, 0]);
+
+    // Moving the subsurface makes smithay build its pieces again, without a commit of the
+    // subsurface itself.
+    subsurface.set_position(10, 10);
+    f.client(id).window(&surface).commit();
+    f.double_roundtrip(id);
+    assert_eq!(
+        opaque_pieces_and_offsets(&mut f),
+        [(0, (0, 0)), (0, (10, 10))]
+    );
+
+    assert_eq!(commit_child(&mut f, 3), [0, 3]);
 }

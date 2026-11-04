@@ -57,6 +57,7 @@ use wayland_client::protocol::wl_compositor::WlCompositor;
 use wayland_client::protocol::wl_display::WlDisplay;
 use wayland_client::protocol::wl_keyboard::{self, WlKeyboard};
 use wayland_client::protocol::wl_output::{self, WlOutput};
+use wayland_client::protocol::wl_region::WlRegion;
 use wayland_client::protocol::wl_registry::{self, WlRegistry};
 use wayland_client::protocol::wl_seat::{self, WlSeat};
 use wayland_client::protocol::wl_shm::{self, WlShm};
@@ -1154,6 +1155,7 @@ impl Dispatch<ExtSessionLockSurfaceV1, (WlSurface, WpViewport)> for State {
 
 wayland_client::delegate_noop!(State: ExtSessionLockManagerV1);
 wayland_client::delegate_noop!(State: ZwlrVirtualPointerManagerV1);
+wayland_client::delegate_noop!(State: WlRegion);
 wayland_client::delegate_noop!(State: ignore WlSubcompositor);
 wayland_client::delegate_noop!(State: ignore WlSubsurface);
 wayland_client::delegate_noop!(State: ignore XdgPositioner);
