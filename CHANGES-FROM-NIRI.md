@@ -276,6 +276,13 @@ The spawn fix is about a background thread that never finished.
 - **Fixed-name D-Bus screenshot in `/tmp`.**
     With `screenshot-path null`, niri writes D-Bus screenshots to `/tmp/screenshot.png`, a fixed name in a directory that all users share.
     nori writes them to `$XDG_RUNTIME_DIR/screenshot.png` and uses the temporary directory only if no runtime directory is set ([dc91dc78](https://github.com/Deliveos/nori/commit/dc91dc785f9c440cbb9f0365a7b38972d0ffcd28); fixes [#14](https://github.com/Deliveos/nori/issues/14)).
+- **Drags started on another client's click.**
+    A client starts drag and drop with `wl_data_device.start_drag`, which carries the serial of the click (or touch) that starts the drag.
+    The smithay version that niri uses only checks that the serial is that of the current click, not that the click went to the client that sends the request.
+    Serials come from one counter for all clients, and a client sees recent values in its own events, so it can keep sending `start_drag` with the next few serials (wrong ones are ignored without an error); when the user then presses a button in another window, the request with the matching serial turns that press into a drag of the client's data. The drag starts with no target, so a click without moving the pointer only cancels it, but if the user moves the pointer while holding the button, as when selecting text, the data is dropped on release into the window under the pointer, if that window accepts it, for example pasted into a terminal.
+    niri offers `wl_data_device` to clients behind a security context too, so a sandboxed client can do this.
+    The smithay fork starts a drag only if the surface that got the click or touch belongs to the client that sends `start_drag`.
+    The tests are `drag_does_not_start_on_another_clients_click` and `drag_starts_on_own_click` in `src/tests/data_device.rs`; they use the pointer, and the touch case isn't tested ([#291](https://github.com/Deliveos/nori/pull/291); fixes [#153](https://github.com/Deliveos/nori/issues/153)).
 
 ## Other bug fixes
 
@@ -633,7 +640,7 @@ niri does some bookkeeping on every iteration of its event loop, even when nothi
 
 - **smithay fork.**
     niri builds smithay and smithay-drm-extras from [Smithay/smithay](https://github.com/Smithay/smithay) at `8a270232`.
-    nori builds them from [Deliveos/smithay](https://github.com/Deliveos/smithay) at `a4e63b48`, on its `nori` branch: the same version plus the `xdg_positioner` fixes for [#90](https://github.com/Deliveos/nori/issues/90) and [#104](https://github.com/Deliveos/nori/issues/104), the negative size fixes for [#128](https://github.com/Deliveos/nori/issues/128), upstream Smithay's fix of `Rectangle::subtract_rects_many_in_place` (commit `2923f224`, cherry-picked) for [#281](https://github.com/Deliveos/nori/issues/281), and reading virtual keyboard keymaps instead of mapping them, with a 1 MiB limit, for [#183](https://github.com/Deliveos/nori/issues/183).
+    nori builds them from [Deliveos/smithay](https://github.com/Deliveos/smithay) at `07220876`, on its `nori` branch: the same version plus the `xdg_positioner` fixes for [#90](https://github.com/Deliveos/nori/issues/90) and [#104](https://github.com/Deliveos/nori/issues/104), the negative size fixes for [#128](https://github.com/Deliveos/nori/issues/128), upstream Smithay's fix of `Rectangle::subtract_rects_many_in_place` (commit `2923f224`, cherry-picked) for [#281](https://github.com/Deliveos/nori/issues/281), reading virtual keyboard keymaps instead of mapping them, with a 1 MiB limit, for [#183](https://github.com/Deliveos/nori/issues/183), and starting a drag only for the client that got the click, for [#153](https://github.com/Deliveos/nori/issues/153).
     Builds that fetch or vendor the dependencies, including the Nix flake, get smithay from there, so the pinned fork commits have to stay reachable from a branch or tag of the fork ([#101](https://github.com/Deliveos/nori/pull/101), [#122](https://github.com/Deliveos/nori/pull/122), [#266](https://github.com/Deliveos/nori/pull/266), [#286](https://github.com/Deliveos/nori/pull/286), [#291](https://github.com/Deliveos/nori/pull/291)).
     Switching back to upstream smithay once the fixes are there is tracked in [#105](https://github.com/Deliveos/nori/issues/105).
 - **PKGBUILD for the AUR.**

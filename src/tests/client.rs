@@ -56,6 +56,10 @@ use wayland_client::globals::Global;
 use wayland_client::protocol::wl_buffer::{self, WlBuffer};
 use wayland_client::protocol::wl_callback::{self, WlCallback};
 use wayland_client::protocol::wl_compositor::WlCompositor;
+use wayland_client::protocol::wl_data_device::{self, WlDataDevice};
+use wayland_client::protocol::wl_data_device_manager::WlDataDeviceManager;
+use wayland_client::protocol::wl_data_offer::WlDataOffer;
+use wayland_client::protocol::wl_data_source::WlDataSource;
 use wayland_client::protocol::wl_display::WlDisplay;
 use wayland_client::protocol::wl_keyboard::{self, WlKeyboard};
 use wayland_client::protocol::wl_output::{self, WlOutput};
@@ -425,6 +429,17 @@ impl Client {
             .find(|g| g.interface == ZwlrOutputManagerV1::interface().name)
             .unwrap();
         let version = min(global.version, ZwlrOutputManagerV1::interface().version);
+        self.registry.bind(global.name, version, &self.qh, ())
+    }
+
+    pub fn bind_data_device_manager(&mut self) -> WlDataDeviceManager {
+        let global = self
+            .state
+            .globals
+            .iter()
+            .find(|g| g.interface == WlDataDeviceManager::interface().name)
+            .unwrap();
+        let version = min(global.version, WlDataDeviceManager::interface().version);
         self.registry.bind(global.name, version, &self.qh, ())
     }
 
@@ -1191,6 +1206,9 @@ impl Dispatch<ExtSessionLockSurfaceV1, (WlSurface, WpViewport)> for State {
 
 wayland_client::delegate_noop!(State: ExtSessionLockManagerV1);
 wayland_client::delegate_noop!(State: ZwlrVirtualPointerManagerV1);
+wayland_client::delegate_noop!(State: WlDataDeviceManager);
+wayland_client::delegate_noop!(State: ignore WlDataSource);
+wayland_client::delegate_noop!(State: ignore WlDataOffer);
 wayland_client::delegate_noop!(State: WlRegion);
 wayland_client::delegate_noop!(State: ignore WlSubcompositor);
 wayland_client::delegate_noop!(State: ignore WlSubsurface);
@@ -1672,3 +1690,19 @@ impl Dispatch<ZwlrOutputConfigurationV1, ()> for State {
 }
 
 wayland_client::delegate_noop!(State: ZwlrOutputConfigurationHeadV1);
+
+impl Dispatch<WlDataDevice, ()> for State {
+    fn event(
+        _state: &mut Self,
+        _data_device: &WlDataDevice,
+        _event: <WlDataDevice as wayland_client::Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+    }
+
+    wayland_client::event_created_child!(State, WlDataDevice, [
+        wl_data_device::EVT_DATA_OFFER_OPCODE => (WlDataOffer, ()),
+    ]);
+}
