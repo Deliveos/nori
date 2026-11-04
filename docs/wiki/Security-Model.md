@@ -20,6 +20,7 @@ Anything with access to niri's Wayland socket can, among other things:
 - Get the user's clipboard contents via [wlr-data-control](https://wayland.app/protocols/ext-data-control-v1).
 - Create arbitrary fullscreen surfaces through [wlr-layer-shell](https://wayland.app/protocols/wlr-layer-shell-unstable-v1) that can steal the user's input, pretend to be a password entry, or lock the user out of their session.
 - Kill a running lockscreen, create a new lock surface, and tell niri to unlock a locked session.
+- Get a non-master file descriptor of the DRM devices that niri uses, and lease connectors of non-desktop displays, such as a VR headset, via [drm-lease](https://wayland.app/protocols/drm-lease-v1).
 
 Anything with access to niri's [IPC](./IPC.md) socket can, among other things:
 
