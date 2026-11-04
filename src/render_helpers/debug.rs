@@ -4,6 +4,7 @@ use smithay::backend::renderer::utils::CommitCounter;
 use smithay::backend::renderer::Color32F;
 use smithay::utils::Scale;
 
+use super::opaque_limit::limit_opaque_regions;
 use super::renderer::NiriRenderer;
 use super::solid_color::SolidColorRenderElement;
 use crate::niri::OutputRenderElements;
@@ -60,7 +61,8 @@ pub fn draw_damage<R: NiriRenderer>(
         return;
     };
 
-    let Ok((Some(damage), _)) = damage_tracker.damage_output(1, elements) else {
+    let limited = limit_opaque_regions(elements, scale);
+    let Ok((Some(damage), _)) = damage_tracker.damage_output(1, &limited) else {
         return;
     };
 

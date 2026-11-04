@@ -19,6 +19,7 @@ use smithay::utils::user_data::UserDataMap;
 use smithay::utils::{Buffer, Logical, Physical, Point, Rectangle, Scale, Size, Transform};
 
 use super::clipped_encompassing_geo;
+use super::opaque_limit::limit_opaque_regions;
 use super::renderer::AsGlesFrame as _;
 use crate::backend::tty::{TtyFrame, TtyRenderer, TtyRendererError};
 
@@ -96,6 +97,7 @@ impl OffscreenBuffer {
                     )
                 }),
         );
+        let elements = limit_opaque_regions(&elements, scale);
 
         // Guard against empty elements producing a zero size.
         let mut src_size = geo.size;

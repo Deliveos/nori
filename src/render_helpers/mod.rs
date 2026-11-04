@@ -39,6 +39,7 @@ pub mod framebuffer_effect;
 pub mod gradient_fade_texture;
 pub mod memory;
 pub mod offscreen;
+pub mod opaque_limit;
 pub mod primary_gpu_texture;
 pub mod render_elements;
 pub mod renderer;

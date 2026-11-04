@@ -14,6 +14,7 @@ use smithay::utils::{Buffer, Logical, Physical, Scale, Size, Transform};
 
 use crate::niri::OutputRenderElements;
 use crate::render_helpers::blur::{Blur, BlurOptions};
+use crate::render_helpers::opaque_limit::limit_opaque_regions;
 use crate::utils::get_monotonic_time;
 
 #[derive(Debug)]
@@ -272,6 +273,7 @@ impl EffectBuffer {
         };
 
         let res = {
+            let elements = limit_opaque_regions(&elements, self.scale);
             let mut target = renderer
                 .bind(&mut offscreen.texture)
                 .context("error binding texture")?;
