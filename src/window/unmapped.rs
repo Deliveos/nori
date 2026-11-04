@@ -68,6 +68,10 @@ pub enum InitialConfigureState {
         /// Workspace to open this window on.
         workspace_name: Option<String>,
 
+        /// Whether `workspace_name` comes from the `open-on-workspace` window rule, rather than
+        /// from the workspace that was active at the initial configure.
+        workspace_from_rule: bool,
+
         /// Whether the window should be maximized.
         ///
         /// This corresponds to the window having the Maximized toplevel state. However, if the

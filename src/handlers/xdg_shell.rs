@@ -514,13 +514,15 @@ impl XdgShellHandler for State {
                     rules,
                     output,
                     workspace_name,
+                    workspace_from_rule,
                     is_pending_maximized,
                     ..
                 } => {
                     let ws = configured_window_workspace(
                         &self.niri.layout,
                         &toplevel,
-                        workspace_name.as_deref(),
+                        workspace_name,
+                        *workspace_from_rule,
                         None,
                         output,
                     );
@@ -578,12 +580,14 @@ impl XdgShellHandler for State {
                     is_full_width,
                     output,
                     workspace_name,
+                    workspace_from_rule,
                     is_pending_maximized,
                 } => {
                     let ws = configured_window_workspace(
                         &self.niri.layout,
                         &toplevel,
-                        workspace_name.as_deref(),
+                        workspace_name,
+                        *workspace_from_rule,
                         None,
                         output,
                     );
@@ -673,12 +677,14 @@ impl XdgShellHandler for State {
                     rules,
                     output,
                     workspace_name,
+                    workspace_from_rule,
                     ..
                 } => {
                     let ws = configured_window_workspace(
                         &self.niri.layout,
                         &toplevel,
-                        workspace_name.as_deref(),
+                        workspace_name,
+                        *workspace_from_rule,
                         requested_output.as_ref(),
                         output,
                     );
@@ -731,12 +737,14 @@ impl XdgShellHandler for State {
                     is_full_width,
                     output,
                     workspace_name,
+                    workspace_from_rule,
                     is_pending_maximized,
                 } => {
                     let ws = configured_window_workspace(
                         &self.niri.layout,
                         &toplevel,
-                        workspace_name.as_deref(),
+                        workspace_name,
+                        *workspace_from_rule,
                         None,
                         output,
                     );
@@ -1136,7 +1144,8 @@ impl State {
         // Set the tiled state for the initial configure.
         update_tiled_state(toplevel, config.prefer_no_csd, rules.tiled_state);
 
-        // Set the configured settings.
+        // Set the configured settings. With the rule set, the workspace is the rule's or none.
+        let workspace_from_rule = rules.open_on_workspace.is_some();
         *state = InitialConfigureState::Configured {
             rules,
             width,
@@ -1146,6 +1155,7 @@ impl State {
             is_full_width,
             output,
             workspace_name: ws.and_then(|w| w.name().cloned()),
+            workspace_from_rule,
             is_pending_maximized,
         };
 
@@ -1414,23 +1424,46 @@ impl State {
 
 /// Picks the workspace to configure a window for after its initial configure, before it maps.
 ///
-/// Follows the map's choice of output, with one exception kept from before: the output of a
-/// fullscreen request comes first, while the map prefers the named workspace (#255). Then come the
-/// parent's output if the window will open next to its parent, the named workspace that the window
-/// was configured for, the configured output and the active monitor. When the window will open
-/// next to its parent, it is configured for the named or the active workspace of the parent's
-/// monitor, as before, not for the parent's own workspace, where the map puts it.
+/// First, a named workspace that the window was configured for, on another monitor than the
+/// output of a fullscreen request, decides between the two (#255). One from the `open-on-workspace`
+/// rule (`workspace_from_rule`) wins, and the request's output is ignored. One that was only active
+/// at the initial configure is dropped from `workspace_name`, so that the map opens the window on
+/// the requested output too. This includes the named active workspace of an `open-on-output`
+/// monitor, so unlike at the initial configure, the request wins over `open-on-output` here.
 ///
-/// Stores the picked monitor's output in `output` for the output of a fullscreen request and for
-/// the active monitor, as before. Otherwise keeps the configured output (`None` if it is gone), so
-/// that the request doesn't change whether the map opens the window next to its parent.
+/// Then follows the map's choice of output: the output of the fullscreen request, the parent's
+/// output if the window will open next to its parent, the named workspace, the configured output
+/// and the active monitor. When the window will open next to its parent, it is configured for the
+/// named or the active workspace of the parent's monitor, as before, not for the parent's own
+/// workspace, where the map puts it.
+///
+/// Stores the picked monitor's output in `output` for the output of a fullscreen request that isn't
+/// ignored and for the active monitor, as before. Otherwise keeps the configured output (`None` if
+/// it is gone), so that the request doesn't change whether the map opens the window next to its
+/// parent.
 fn configured_window_workspace<'a>(
     layout: &'a Layout<Mapped>,
     toplevel: &ToplevelSurface,
-    workspace_name: Option<&str>,
+    workspace_name: &mut Option<String>,
+    workspace_from_rule: bool,
     requested_output: Option<&Output>,
     output: &mut Option<Output>,
 ) -> Option<&'a Workspace<Mapped>> {
+    let mut requested_output = requested_output;
+    if let Some(requested_mon) = requested_output.and_then(|o| layout.monitor_for_output(o)) {
+        let named_mon = workspace_name
+            .as_deref()
+            .and_then(|name| layout.monitor_for_workspace(name));
+        if named_mon.is_some_and(|mon| mon.output() != requested_mon.output()) {
+            if workspace_from_rule {
+                requested_output = None;
+            } else {
+                *workspace_name = None;
+            }
+        }
+    }
+    let workspace_name = workspace_name.as_deref();
+
     // Like the map, ignore a configured output that is gone.
     let configured = output
         .take()
