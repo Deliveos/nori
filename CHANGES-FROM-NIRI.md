@@ -47,6 +47,7 @@ Pull requests that change how nori behaves compared with niri update this file i
     - the xwayland-satellite on-demand test must finish within 2 seconds, or the integration stays off until a config reload changes the `xwayland-satellite` section, or a restart ([details](#xwayland-satellite-test)).
 - Screenshots named from `screenshot-path` never overwrite an existing file: when the name is taken (two screenshots in the same second, or a `screenshot-path` without time fields), nori adds ` (2)` … ` (999)`, and saving fails after that; with `screenshot-path null` D-Bus screenshots go to `$XDG_RUNTIME_DIR/screenshot.png` instead of `/tmp/screenshot.png` ([details](#screenshots)).
 - Only the owner of the `org.gnome.Orca.KeyboardMonitor` bus name may listen to or grab keys through the accessibility D-Bus interface ([details](#keyboardmonitor)).
+- Clients behind a security context, such as Flatpak apps, don't get DRM leases for VR headsets and other non-desktop displays ([details](#drm-lease-sandbox)).
 - PipeWire screencasts offer 4 buffers by default instead of 8 ([details](#pipewire-buffers)).
 - Starting the session with `--session` on systemd stops an `xdg-desktop-portal.service` that is already running, so it restarts with nori's environment ([details](#portal-at-session-start)).
 
@@ -248,6 +249,10 @@ The spawn fix is about a background thread that never finished.
     niri serves `WatchKeyboard`, `GrabKeyboard` and `SetKeyGrabs` of `org.freedesktop.a11y.KeyboardMonitor` to any caller on the session bus, so any unsandboxed program can receive every keystroke, including lock screen passwords.
     nori serves them only to the owner of the bus name `org.gnome.Orca.KeyboardMonitor` and returns `AccessDenied` to everyone else; Orca keeps working.
     This stops programs that don't own the name, but a program can still claim the name while Orca isn't running, so [Security-Model.md](docs/wiki/Security-Model.md) still applies ([84183bb6](https://github.com/Deliveos/nori/commit/84183bb6c901603c7320b4a85740f8cc53faf8bb); fixes [#20](https://github.com/Deliveos/nori/issues/20)).
+- <a id="drm-lease-sandbox"></a>**DRM leases for sandboxed clients.**
+    niri offers the drm-lease global (`wp_drm_lease_device_v1`) to every client, including those behind a security context, although it offers 16 other globals, such as screencopy, virtual keyboard and pointer, output management and gamma control, only to clients without one (15 through `client_is_unrestricted`, and gamma control through the same check written inline), and [Security-Model.md](docs/wiki/Security-Model.md) says that all unsafe protocols are inaccessible through the filtered socket.
+    On bind, smithay opens the DRM primary node in the compositor's process and sends the client a non-master fd of it, and a lease request can take any non-desktop connector, such as a VR headset's, so a sandbox without device access gets a DRM fd it couldn't open itself.
+    nori offers the global only to clients without a security context, and Security-Model.md lists drm-lease among the things that unsandboxed clients can do; a VR runtime inside a sandbox that relied on the global no longer gets it ([#285](https://github.com/Deliveos/nori/pull/285); fixes [#194](https://github.com/Deliveos/nori/issues/194)).
 - **Fixed-name D-Bus screenshot in `/tmp`.**
     With `screenshot-path null`, niri writes D-Bus screenshots to `/tmp/screenshot.png`, a fixed name in a directory that all users share.
     nori writes them to `$XDG_RUNTIME_DIR/screenshot.png` and uses the temporary directory only if no runtime directory is set ([dc91dc78](https://github.com/Deliveos/nori/commit/dc91dc785f9c440cbb9f0365a7b38972d0ffcd28); fixes [#14](https://github.com/Deliveos/nori/issues/14)).

@@ -64,7 +64,7 @@ use wayland_protocols::wp::presentation_time::server::wp_presentation_feedback;
 use super::{IpcOutputMap, RenderResult};
 use crate::backend::OutputId;
 use crate::frame_clock::FrameClock;
-use crate::niri::{Niri, RedrawState, State};
+use crate::niri::{client_is_unrestricted, Niri, RedrawState, State};
 use crate::render_helpers::debug::draw_damage;
 use crate::render_helpers::renderer::AsGlesRenderer;
 use crate::render_helpers::{resources, shaders, RenderCtx, RenderTarget};
@@ -939,9 +939,16 @@ impl Tty {
             })
             .unwrap();
 
-        let drm_lease_state = DrmLeaseState::new::<State>(&niri.display_handle, &node)
-            .map_err(|err| warn!("error initializing DRM leasing for {node}: {err:?}"))
-            .ok();
+        // Binding the global gives the client a non-master DRM fd of this device, and a lease gives
+        // it connectors of its own, so clients behind a security context don't get the global, as
+        // for other privileged globals (#194).
+        let drm_lease_state = DrmLeaseState::new_with_filter::<State, _>(
+            &niri.display_handle,
+            &node,
+            client_is_unrestricted,
+        )
+        .map_err(|err| warn!("error initializing DRM leasing for {node}: {err:?}"))
+        .ok();
         if drm_lease_state.is_some() {
             // Lease objects of an earlier device with this node now go to the new state.
             self.removed_drm_lease_states.remove(&node);

@@ -2644,10 +2644,6 @@ impl Niri {
 
         let (blocker_cleared_tx, blocker_cleared_rx) = mpsc::channel();
 
-        fn client_is_unrestricted(client: &Client) -> bool {
-            !client.get_data::<ClientState>().unwrap().restricted
-        }
-
         let compositor_state = CompositorState::new_v6::<State>(&display_handle);
         let xdg_shell_state = XdgShellState::new_with_capabilities::<State>(
             &display_handle,
@@ -7818,6 +7814,13 @@ pub struct NewClient {
     pub client: UnixStream,
     pub restricted: bool,
     pub credentials_unknown: bool,
+}
+
+/// Whether `client` may see the privileged globals: it isn't behind a security context.
+pub fn client_is_unrestricted(client: &Client) -> bool {
+    client
+        .get_data::<ClientState>()
+        .is_some_and(|data| !data.restricted)
 }
 
 pub struct ClientState {
