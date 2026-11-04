@@ -28,17 +28,17 @@ tracy-client = { version = "0.18.5", default-features = false }
 [workspace.dependencies.smithay]
 # version = "0.4.1"
 # Smithay 8a27023 plus the xdg_positioner fixes for #90 and #104, the negative Size fixes for #128,
-# upstream's subtract_rects_many_in_place fix (2923f22) for #281, the virtual keyboard keymap fix
+# upstream's subtract_rects_many_in_place fix (2923f22) for #281, the virtual keyboard keymap fixes
 # for #183, the start_drag client check for #153, and the set of surfaces for #154, from the fork's
 # long-lived `nori` branch. Switch back to Smithay/smithay once the fixes are upstream (#105).
 git = "https://github.com/Deliveos/smithay.git"
-rev = "0a77f9dd06660f7b709c4913152765f2b41009af"
+rev = "9fec9bbc3dfcca3de95f746074b16d6a088b8db6"
 default-features = false
 
 [workspace.dependencies.smithay-drm-extras]
 # version = "0.1.0"
 git = "https://github.com/Deliveos/smithay.git"
-rev = "0a77f9dd06660f7b709c4913152765f2b41009af"
+rev = "9fec9bbc3dfcca3de95f746074b16d6a088b8db6"
 # path = "../smithay/smithay-drm-extras"
 
 [package]
