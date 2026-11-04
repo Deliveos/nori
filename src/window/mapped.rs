@@ -40,11 +40,14 @@ use crate::render_helpers::surface::{
     push_elements_from_surface_tree, render_snapshot_from_surface_tree,
 };
 use crate::render_helpers::xray::XrayPos;
-use crate::render_helpers::{background_effect, BakedBuffer, RenderCtx, RenderTarget};
+use crate::render_helpers::{
+    background_effect, offscreen_clip, resize_texture_max_size, BakedBuffer, RenderCtx,
+    RenderTarget,
+};
 use crate::utils::id::IdCounter;
 use crate::utils::transaction::Transaction;
 use crate::utils::{
-    get_credentials_for_surface, send_scale_transform, update_tiled_state,
+    get_credentials_for_surface, output_size, send_scale_transform, update_tiled_state,
     with_toplevel_last_uncommitted_configure, with_toplevel_role, with_toplevel_role_and_current,
     ResizeEdge,
 };
@@ -484,6 +487,7 @@ impl Mapped {
             blocked_out_contents,
             block_out_from: self.rules().block_out_from,
             size,
+            extent: Rectangle::from_size(size),
             texture: Default::default(),
             texture_with_blocked_out_bg: Default::default(),
             blocked_out_texture: Default::default(),
@@ -559,12 +563,21 @@ impl Mapped {
 
         let snapshot = self.render_snapshot(renderer);
         // Render it right away, since the client may draw into these buffers before it commits.
-        let ctx = RenderCtx {
-            renderer,
-            target: RenderTarget::Output,
-            xray: None,
-        };
-        snapshot.texture(ctx, Scale::from(scale));
+        //
+        // Only render a texture that keeps the whole window. A window that doesn't fit is drawn
+        // as is while it resizes on this output. If it moves to an output where it fits before it
+        // answers, the tile renders the texture there, from the buffers as they are then. So a
+        // texture, once rendered, keeps the whole window on any output where the tile animates the
+        // resize through textures.
+        let max_size = resize_texture_max_size(output_size(output));
+        if offscreen_clip(snapshot.extent, max_size).contains_rect(snapshot.extent) {
+            let ctx = RenderCtx {
+                renderer,
+                target: RenderTarget::Output,
+                xray: None,
+            };
+            snapshot.texture(ctx, Scale::from(scale), max_size);
+        }
         self.configure_snapshot = Some((snapshot, scale));
     }
 

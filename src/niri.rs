@@ -6673,6 +6673,7 @@ impl Niri {
                         Transform::Normal,
                         Fourcc::Abgr8888,
                         &pointer,
+                        None,
                     );
                     if let Err(err) = &res {
                         warn!("error rendering pointer for {}: {err:?}", output.name());
@@ -7058,6 +7059,7 @@ impl Niri {
             Transform::Normal,
             Fourcc::Abgr8888,
             &textures,
+            None,
         )
         .context("error rendering")?;
 

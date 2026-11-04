@@ -18,7 +18,7 @@ use smithay::backend::renderer::{
 use smithay::utils::user_data::UserDataMap;
 use smithay::utils::{Buffer, Logical, Physical, Point, Rectangle, Scale, Size, Transform};
 
-use super::encompassing_geo;
+use super::clipped_encompassing_geo;
 use super::renderer::AsGlesFrame as _;
 use crate::backend::tty::{TtyFrame, TtyRenderer, TtyRendererError};
 
@@ -69,18 +69,33 @@ pub struct OffscreenData {
 }
 
 impl OffscreenBuffer {
+    /// Renders the part of `elements` inside `clip` into the buffer.
     pub fn render(
         &self,
         renderer: &mut GlesRenderer,
         scale: Scale<f64>,
         elements: &[impl RenderElement<GlesRenderer>],
+        clip: Rectangle<f64, Logical>,
     ) -> anyhow::Result<(OffscreenRenderElement, SyncPoint, OffscreenData)> {
         let _span = tracy_client::span!("OffscreenBuffer::render");
 
-        let geo = encompassing_geo(scale, elements.iter());
-        let elements = Vec::from_iter(elements.iter().map(|ele| {
-            RelocateRenderElement::from_element(ele, geo.loc.upscale(-1), Relocate::Relative)
-        }));
+        let geo = clipped_encompassing_geo(scale, elements.iter(), clip);
+        // Leave out the elements entirely outside the clip. A texture kept from an earlier, larger
+        // render could otherwise have room for some of them past `geo`, where they wouldn't be
+        // shown but would still count as presented.
+        let clip = clip.to_physical_precise_up(scale);
+        let elements = Vec::from_iter(
+            elements
+                .iter()
+                .filter(|ele| ele.geometry(scale).intersection(clip).is_some())
+                .map(|ele| {
+                    RelocateRenderElement::from_element(
+                        ele,
+                        geo.loc.upscale(-1),
+                        Relocate::Relative,
+                    )
+                }),
+        );
 
         // Guard against empty elements producing a zero size.
         let mut src_size = geo.size;
@@ -198,6 +213,15 @@ impl OffscreenBuffer {
         };
 
         Ok((elem, res.sync, data))
+    }
+}
+
+impl OffscreenBuffer {
+    /// Size of the texture kept for the next render, if any.
+    #[cfg(test)]
+    pub fn texture_size(&self) -> Option<Size<i32, Buffer>> {
+        let inner = self.inner.borrow();
+        inner.as_ref().map(|inner| inner.texture.size())
     }
 }
 
@@ -373,6 +397,7 @@ mod tests {
     use smithay::backend::egl::{EGLContext, EGLDisplay};
 
     use super::*;
+    use crate::render_helpers::offscreen_clip;
     use crate::render_helpers::solid_color::{SolidColorBuffer, SolidColorRenderElement};
 
     #[test]
@@ -393,7 +418,8 @@ mod tests {
                     SolidColorRenderElement::from_buffer(b, *loc, 1., Kind::Unspecified)
                 })
                 .collect();
-            buffer.render(renderer, scale, &elements).unwrap().0
+            let clip = Rectangle::from_size((100., 100.).into());
+            buffer.render(renderer, scale, &elements, clip).unwrap().0
         };
 
         // The content shrinks from 40 × 40 to 20 × 20, and the texture stays 40 × 40.
@@ -416,5 +442,33 @@ mod tests {
             .into_iter()
             .collect();
         assert_eq!(damage, [Rectangle::new((10, 10).into(), (2, 2).into())]);
+    }
+
+    #[test]
+    fn egl_far_elements_dont_make_the_texture_larger() {
+        let mut renderer = unsafe {
+            let display = EGLDisplay::new(EGLSurfacelessDisplay).unwrap();
+            let context = EGLContext::new(&display).unwrap();
+            GlesRenderer::new(context).unwrap()
+        };
+        let scale = Scale::from(1.);
+        let buffer = OffscreenBuffer::default();
+
+        let window = SolidColorBuffer::new((10., 10.), [1., 0., 0., 1.]);
+        let far = SolidColorBuffer::new((1., 1.), [0., 1., 0., 1.]);
+        let elements = [
+            SolidColorRenderElement::from_buffer(&far, (3000., 3000.), 1., Kind::Unspecified),
+            SolidColorRenderElement::from_buffer(&window, (0., 0.), 1., Kind::Unspecified),
+        ];
+
+        let clip = offscreen_clip(
+            Rectangle::from_size((10., 10.).into()),
+            (1920., 1080.).into(),
+        );
+        let (elem, _sync, _data) = buffer
+            .render(&mut renderer, scale, &elements, clip)
+            .unwrap();
+        assert_eq!(elem.texture().size(), Size::from((10, 10)));
+        assert_eq!(elem.offset(), Point::from((0., 0.)));
     }
 }

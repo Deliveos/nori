@@ -174,6 +174,137 @@ pub fn encompassing_geo(
         .unwrap_or_default()
 }
 
+/// How far past a window or a tile its contents are rendered into an offscreen texture.
+///
+/// Clients choose where their subsurfaces go, and with wp_viewporter how large a surface is
+/// regardless of its buffer, so the area that a window's elements cover has no limit. A texture
+/// sized to that area could take gigabytes of GPU memory, so animations that render a window into
+/// a texture cut off what is farther than this from it.
+pub const OFFSCREEN_MARGIN: f64 = 500.;
+
+/// How large a window can be on each axis, in view sizes, for its resize animation to go through
+/// textures.
+///
+/// The resize shader stretches each of its two textures over the whole animated area, so a texture
+/// cut short of its window would leave part of that area empty. So the textures of a resize keep
+/// the whole window up to this many view sizes plus [`OFFSCREEN_MARGIN`], and a larger window is
+/// drawn as is while it resizes. Twice the view keeps the animation for a column twice as wide as
+/// the view, and for a window that fits its output and moves to an output with the same mode at
+/// twice the scale. A window that moves to an output with a much smaller logical size can be
+/// larger than that, such as a maximized window moved from a 3440 × 1440 output at scale 1 to a
+/// 2560 × 1600 output at scale 2 (3408 px on a 1280 px view), and is then drawn as is.
+pub const RESIZE_TEXTURE_VIEWS: f64 = 2.;
+
+/// `max_size` for [`offscreen_clip()`] of the textures of a resize animation in a view of
+/// `view_size`, see [`RESIZE_TEXTURE_VIEWS`].
+pub fn resize_texture_max_size(view_size: Size<f64, Logical>) -> Size<f64, Logical> {
+    view_size.upscale(RESIZE_TEXTURE_VIEWS)
+}
+
+/// Area to render into an offscreen texture for a window or a tile, when its position in the view
+/// isn't known.
+///
+/// Like [`offscreen_clip_in_view()`] with the view at the start of `extent`: on an axis where
+/// `extent` is longer than `view_size`, only its start (left or top part) is kept.
+pub fn offscreen_clip(
+    extent: Rectangle<f64, Logical>,
+    view_size: Size<f64, Logical>,
+) -> Rectangle<f64, Logical> {
+    offscreen_clip_in_view(extent, Rectangle::new(extent.loc, view_size))
+}
+
+/// Area to render into an offscreen texture for a window or a tile.
+///
+/// `extent` is what the compositor itself draws for it: the window geometry, or the tile with its
+/// border, focus ring and shadow. `view` is the view it is shown in, in the same coordinates. On
+/// an axis where `extent` fits into the size of `view`, all of `extent` is kept. On an axis where
+/// it doesn't, only the part of `extent` as long as `view` and nearest to it is kept. Then
+/// [`OFFSCREEN_MARGIN`] is added on each side.
+///
+/// The window size doesn't bound the area by itself: a client that doesn't set its window geometry
+/// gets the bounding box of its surface and subsurfaces as the geometry, far-away subsurfaces
+/// included.
+pub fn offscreen_clip_in_view(
+    extent: Rectangle<f64, Logical>,
+    view: Rectangle<f64, Logical>,
+) -> Rectangle<f64, Logical> {
+    let axis = |start: f64, len: f64, view_start: f64, view_len: f64| {
+        if len <= view_len {
+            (start, len)
+        } else {
+            // Not clamp(), which panics on NaN.
+            let start = f64::max(start, f64::min(view_start, start + len - view_len));
+            (start, view_len)
+        }
+    };
+    let (x, w) = axis(extent.loc.x, extent.size.w, view.loc.x, view.size.w);
+    let (y, h) = axis(extent.loc.y, extent.size.h, view.loc.y, view.size.h);
+
+    let margin = Point::from((OFFSCREEN_MARGIN, OFFSCREEN_MARGIN));
+    let size = Size::from((w, h)) + margin.upscale(2.).to_size();
+    Rectangle::new(Point::from((x, y)) - margin, size)
+}
+
+/// Shrinks `view` to at most `max_size` on each axis, keeping it over what it shows of `extent`.
+///
+/// `extent` and `view` are as in [`offscreen_clip_in_view()`], which keeps up to the size of the
+/// view, so a view larger than the output would let a texture grow past the bound that it keeps
+/// with a view of the output's size. A tile dragged in the overview has such a view: it is zoomed
+/// out, so the output shows more of it.
+///
+/// On an axis where `view` is longer than `max_size`, the result is as long as `max_size` and
+/// centered on the part of `extent` inside `view`, or on `view` when no part of `extent` is inside
+/// it. Then the clip keeps all of that part when it is at most `max_size` plus
+/// [`OFFSCREEN_MARGIN`] on each side.
+pub fn limit_view_size(
+    extent: Rectangle<f64, Logical>,
+    view: Rectangle<f64, Logical>,
+    max_size: Size<f64, Logical>,
+) -> Rectangle<f64, Logical> {
+    let axis = |start: f64, len: f64, view_start: f64, view_len: f64, max_len: f64| {
+        if view_len <= max_len {
+            return (view_start, view_len);
+        }
+
+        let shown_start = f64::max(start, view_start);
+        let shown_end = f64::min(start + len, view_start + view_len);
+        let center = if shown_start <= shown_end {
+            (shown_start + shown_end) / 2.
+        } else {
+            view_start + view_len / 2.
+        };
+        (center - max_len / 2., max_len)
+    };
+    let (x, w) = axis(
+        extent.loc.x,
+        extent.size.w,
+        view.loc.x,
+        view.size.w,
+        max_size.w,
+    );
+    let (y, h) = axis(
+        extent.loc.y,
+        extent.size.h,
+        view.loc.y,
+        view.size.h,
+        max_size.h,
+    );
+    Rectangle::new(Point::from((x, y)), Size::from((w, h)))
+}
+
+/// Area that the parts of `elements` inside `clip` cover.
+pub fn clipped_encompassing_geo(
+    scale: Scale<f64>,
+    elements: impl Iterator<Item = impl Element>,
+    clip: Rectangle<f64, Logical>,
+) -> Rectangle<i32, Physical> {
+    let clip = clip.to_physical_precise_up(scale);
+    elements
+        .filter_map(|ele| ele.geometry(scale).intersection(clip))
+        .reduce(|a, b| a.merge(b))
+        .unwrap_or_default()
+}
+
 pub fn create_texture(
     renderer: &mut GlesRenderer,
     size: Size<i32, Physical>,
@@ -233,14 +364,24 @@ pub fn copy_framebuffer(
     renderer.copy_framebuffer(target, Rectangle::from_size(target.size()), fourcc)
 }
 
+/// Renders `elements` into a texture covering them, or only their part inside `clip`.
 pub fn render_to_encompassing_texture(
     renderer: &mut GlesRenderer,
     scale: Scale<f64>,
     transform: Transform,
     fourcc: Fourcc,
     elements: &[impl RenderElement<GlesRenderer>],
+    clip: Option<Rectangle<f64, Logical>>,
 ) -> anyhow::Result<(GlesTexture, SyncPoint, Rectangle<i32, Physical>)> {
-    let geo = encompassing_geo(scale, elements.iter());
+    let mut geo = match clip {
+        Some(clip) => clipped_encompassing_geo(scale, elements.iter(), clip),
+        None => encompassing_geo(scale, elements.iter()),
+    };
+    // Guard against nothing inside the clip (or no elements) producing a zero size, which can't be
+    // bound, like OffscreenBuffer does.
+    if geo.size.w == 0 || geo.size.h == 0 {
+        geo.size = Size::new(1, 1);
+    }
     let elements = elements.iter().rev().map(|ele| {
         RelocateRenderElement::from_element(ele, geo.loc.upscale(-1), Relocate::Relative)
     });
@@ -706,5 +847,177 @@ mod tests {
             assert_eq!(bytes.len(), 4 * 2 * 4);
             assert!(bytes.chunks(4).all(|px| px == expected), "{bytes:?}");
         }
+    }
+
+    fn solid(buffer: &SolidColorBuffer, loc: (f64, f64)) -> SolidColorRenderElement {
+        SolidColorRenderElement::from_buffer(buffer, loc, 1., Kind::Unspecified)
+    }
+
+    #[test]
+    fn offscreen_clip_adds_the_margin_up_to_the_view_size() {
+        let view = Size::from((1920., 1080.));
+        let rect = |x, y, w, h| Rectangle::new(Point::from((x, y)), Size::from((w, h)));
+
+        // A window that fits gets the margin on each side.
+        let window = rect(0., 0., 100., 50.);
+        assert_eq!(
+            offscreen_clip(window, view),
+            rect(-500., -500., 1100., 1050.)
+        );
+
+        // A tile with its shadow starts before the origin.
+        let tile = rect(-40., -30., 180., 130.);
+        assert_eq!(offscreen_clip(tile, view), rect(-540., -530., 1180., 1130.));
+
+        // A window larger than the view on an axis, as with a far-away subsurface and no window
+        // geometry set, keeps only its start on that axis.
+        let huge = rect(0., 0., 16001., 50.);
+        assert_eq!(offscreen_clip(huge, view), rect(-500., -500., 2920., 1050.));
+    }
+
+    #[test]
+    fn offscreen_clip_in_view_keeps_the_part_near_the_view() {
+        let rect = |x, y, w, h| Rectangle::new(Point::from((x, y)), Size::from((w, h)));
+        let window = rect(0., 0., 5000., 50.);
+
+        // A view showing the middle of a window wider than it.
+        let view = rect(3000., -200., 1920., 1080.);
+        let clip = offscreen_clip_in_view(window, view);
+        assert_eq!(clip, rect(2500., -500., 2920., 1050.));
+
+        // A view overlapping the end of the window keeps the end.
+        let view = rect(4000., 0., 1920., 1080.);
+        let clip = offscreen_clip_in_view(window, view);
+        assert_eq!(clip, rect(2580., -500., 2920., 1050.));
+
+        // A view before the start of the window keeps the start.
+        let view = rect(-3000., 0., 1920., 1080.);
+        let clip = offscreen_clip_in_view(window, view);
+        assert_eq!(clip, rect(-500., -500., 2920., 1050.));
+
+        // A window that fits into the view is kept whole wherever the view is.
+        let view = rect(-3000., 9000., 1920., 1080.);
+        let clip = offscreen_clip_in_view(rect(10., 20., 100., 50.), view);
+        assert_eq!(clip, rect(-490., -480., 1100., 1050.));
+    }
+
+    #[test]
+    fn limit_view_size_keeps_what_a_zoomed_out_view_shows() {
+        let rect = |x, y, w, h| Rectangle::new(Point::from((x, y)), Size::from((w, h)));
+        let max_size = Size::from((1920., 1080.));
+
+        // A view no larger than the maximum stays as it is.
+        let view = rect(100., -50., 1920., 1080.);
+        assert_eq!(
+            limit_view_size(rect(0., 0., 50., 50.), view, max_size),
+            view
+        );
+
+        // A 200 % column (3792 × 992 px) with a 4 px focus ring, dragged in the overview at zoom
+        // 0.5 so that it is drawn from x = -600 on a 1920 × 1080 output: the output shows tile x
+        // 1200 to 5040, and y -200 to 1960. The tile reaches to x = 3796, so 2596 px of it are
+        // shown on that axis, and the clip keeps them all.
+        let tile = rect(-4., -4., 3800., 1000.);
+        let view = rect(1200., -200., 3840., 2160.);
+        let limited = limit_view_size(tile, view, max_size);
+        assert_eq!(limited, rect(1538., -44., 1920., 1080.));
+        let clip = offscreen_clip_in_view(tile, limited);
+        assert_eq!(clip, rect(1038., -504., 2920., 2000.));
+        assert!(clip.contains_rect(tile.intersection(view).unwrap()));
+
+        // A window much larger than the view, at zoom 0.05: the clip is no larger than with an
+        // unzoomed view.
+        let window = rect(0., 0., 15000., 15000.);
+        let view = rect(-1000., 2000., 38400., 21600.);
+        let clip = offscreen_clip_in_view(window, limit_view_size(window, view, max_size));
+        assert_eq!(clip, rect(6040., 7460., 2920., 2080.));
+
+        // On an axis where the view shows nothing of the window, it is limited around its own
+        // center.
+        let view = rect(20000., 0., 3840., 2160.);
+        assert_eq!(
+            limit_view_size(window, view, max_size),
+            rect(20960., 540., 1920., 1080.)
+        );
+    }
+
+    #[test]
+    fn clipped_encompassing_geo_leaves_out_far_elements() {
+        let scale = Scale::from(2.);
+        let clip = offscreen_clip(
+            Rectangle::from_size((10., 10.).into()),
+            (1920., 1080.).into(),
+        );
+        let geo = |elements: &[SolidColorRenderElement]| {
+            clipped_encompassing_geo(scale, elements.iter(), clip)
+        };
+
+        let window = SolidColorBuffer::new((10., 10.), [0., 0., 0., 1.]);
+        let tiny = SolidColorBuffer::new((1., 1.), [0., 0., 0., 1.]);
+        let wide = SolidColorBuffer::new((4000., 1.), [0., 0., 0., 1.]);
+
+        // A tiny subsurface far away doesn't make the area larger.
+        let far = [solid(&window, (0., 0.)), solid(&tiny, (16000., 16000.))];
+        assert_eq!(geo(&far), Rectangle::from_size((20, 20).into()));
+
+        // One within the margin does.
+        let near = [solid(&window, (0., 0.)), solid(&tiny, (-100., 200.))];
+        assert_eq!(
+            geo(&near),
+            Rectangle::new((-200, 0).into(), (220, 402).into())
+        );
+
+        // A huge surface is cut at the margin, 500 logical px past the window.
+        let huge = [solid(&window, (0., 0.)), solid(&wide, (-2000., 0.))];
+        assert_eq!(
+            geo(&huge),
+            Rectangle::new((-1000, 0).into(), (2020, 20).into())
+        );
+
+        let nothing_inside = [solid(&tiny, (16000., 16000.))];
+        assert_eq!(geo(&nothing_inside), Rectangle::default());
+    }
+
+    #[test]
+    fn egl_encompassing_texture_is_cut_to_the_clip() {
+        let mut renderer = renderer();
+        let scale = Scale::from(1.);
+
+        let window = SolidColorBuffer::new((10., 10.), Color32F::new(0., 1., 0., 1.));
+        let wide = SolidColorBuffer::new((4000., 1.), Color32F::new(1., 0., 0., 1.));
+        let tiny = SolidColorBuffer::new((1., 1.), Color32F::new(0., 0., 1., 1.));
+        // Elements go from top to bottom.
+        let elements = [
+            solid(&window, (0., 0.)),
+            solid(&wide, (-2000., 0.)),
+            solid(&tiny, (3000., 3000.)),
+        ];
+
+        let clip = offscreen_clip(
+            Rectangle::from_size((10., 10.).into()),
+            (1920., 1080.).into(),
+        );
+        let (mut texture, _sync, geo) = render_to_encompassing_texture(
+            &mut renderer,
+            scale,
+            Transform::Normal,
+            Fourcc::Abgr8888,
+            &elements,
+            Some(clip),
+        )
+        .unwrap();
+        assert_eq!(geo, Rectangle::new((-500, 0).into(), (1010, 10).into()));
+        assert_eq!(texture.size(), Size::from((1010, 10)));
+
+        let target = renderer.bind(&mut texture).unwrap();
+        let mapping = copy_framebuffer(&mut renderer, &target, Fourcc::Abgr8888).unwrap();
+        drop(target);
+        let bytes = renderer.map_texture(&mapping).unwrap();
+
+        // Abgr8888 is R, G, B, A in memory. The wide surface is in one row, under the window.
+        let count = |px: [u8; 4]| bytes.chunks(4).filter(|p| *p == px).count();
+        assert_eq!(count([0, 255, 0, 255]), 10 * 10);
+        assert_eq!(count([255, 0, 0, 255]), 1010 - 10);
+        assert_eq!(count([0, 0, 0, 0]), 1010 * 10 - 10 * 10 - 1000);
     }
 }

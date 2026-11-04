@@ -1142,9 +1142,11 @@ impl WindowMruUi {
             elems.push(WindowMruUiRenderElement::SolidColor(render_backdrop(1.)));
 
             let scale = output.current_scale().fractional_scale();
+            // Nothing outside the output is visible.
+            let clip = Rectangle::from_size(output_size(output));
             match inner
                 .offscreen
-                .render(ctx.renderer, Scale::from(scale), &elems)
+                .render(ctx.renderer, Scale::from(scale), &elems, clip)
             {
                 Ok((elem, _sync, _data)) => {
                     // FIXME: would be good to passthrough offscreen data to visible windows here.

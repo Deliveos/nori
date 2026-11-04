@@ -1518,6 +1518,9 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         }
 
         tile_pos.x += self.view_pos();
+        // The view as render() will use it once the tile is removed, in the same coordinates as
+        // `tile_pos`.
+        let mut view_x = self.view_pos();
 
         if col_idx < self.active_column_idx {
             let offset = if removing_last {
@@ -1536,9 +1539,12 @@ impl<W: LayoutElement> ScrollingSpace<W> {
                         .unwrap()
             };
             tile_pos.x -= offset;
+            view_x -= offset;
         }
 
-        self.start_close_animation_for_tile(renderer, snapshot, tile_size, tile_pos, blocker);
+        self.start_close_animation_for_tile(
+            renderer, snapshot, tile_size, tile_pos, view_x, blocker,
+        );
     }
 
     fn start_close_animation_for_tile(
@@ -1547,6 +1553,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         snapshot: TileRenderSnapshot,
         tile_size: Size<f64, Logical>,
         tile_pos: Point<f64, Logical>,
+        view_x: f64,
         blocker: TransactionBlocker,
     ) {
         let anim = Animation::new(
@@ -1565,7 +1572,14 @@ impl<W: LayoutElement> ScrollingSpace<W> {
 
         let scale = Scale::from(self.scale);
         let res = ClosingWindow::new(
-            renderer, snapshot, scale, tile_size, tile_pos, blocker, anim,
+            renderer,
+            snapshot,
+            scale,
+            tile_size,
+            tile_pos,
+            blocker,
+            anim,
+            Rectangle::new(Point::from((view_x, 0.)), self.view_size),
         );
         match res {
             Ok(closing) => {

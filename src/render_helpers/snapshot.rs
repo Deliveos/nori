@@ -6,7 +6,7 @@ use smithay::backend::renderer::element::{Kind, RenderElement};
 use smithay::backend::renderer::gles::{GlesRenderer, GlesTexture};
 use smithay::utils::{Logical, Physical, Point, Rectangle, Scale, Size, Transform};
 
-use super::{render_to_encompassing_texture, ToRenderElement};
+use super::{offscreen_clip, render_to_encompassing_texture, ToRenderElement};
 use crate::render_helpers::{RenderCtx, RenderTarget};
 
 /// Snapshot of a render.
@@ -34,6 +34,12 @@ pub struct RenderSnapshot<C, B> {
     /// Visual size of the element at the point of the snapshot.
     pub size: Size<f64, Logical>,
 
+    /// Area that the compositor itself draws for the element, relative to the contents: the
+    /// window geometry, or the tile with its border, focus ring and shadow.
+    ///
+    /// Textures of the contents are cut around it, see [`offscreen_clip()`].
+    pub extent: Rectangle<f64, Logical>,
+
     /// Contents rendered into a texture (lazily).
     pub texture: OnceCell<Option<(GlesTexture, Rectangle<i32, Physical>)>>,
 
@@ -51,11 +57,15 @@ where
     EC: RenderElement<GlesRenderer>,
     EB: RenderElement<GlesRenderer>,
 {
+    /// Returns the contents rendered into a texture, cut around [`Self::extent`] with `max_size`
+    /// as in [`offscreen_clip()`].
     pub fn texture(
         &self,
         ctx: RenderCtx<GlesRenderer>,
         scale: Scale<f64>,
+        max_size: Size<f64, Logical>,
     ) -> Option<&(GlesTexture, Rectangle<i32, Physical>)> {
+        let clip = offscreen_clip(self.extent, max_size);
         if ctx.target.should_block_out(self.block_out_from) {
             self.blocked_out_texture.get_or_init(|| {
                 let _span = tracy_client::span!("RenderSnapshot::texture");
@@ -74,6 +84,7 @@ where
                     Transform::Normal,
                     Fourcc::Abgr8888,
                     &elements,
+                    Some(clip),
                 ) {
                     Ok((texture, _sync_point, geo)) => Some((texture, geo)),
                     Err(err) => {
@@ -101,6 +112,7 @@ where
                     Transform::Normal,
                     Fourcc::Abgr8888,
                     &elements,
+                    Some(clip),
                 ) {
                     Ok((texture, _sync_point, geo)) => Some((texture, geo)),
                     Err(err) => {
@@ -127,6 +139,7 @@ where
                     Transform::Normal,
                     Fourcc::Abgr8888,
                     &elements,
+                    Some(clip),
                 ) {
                     Ok((texture, _sync_point, geo)) => Some((texture, geo)),
                     Err(err) => {

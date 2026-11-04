@@ -644,7 +644,15 @@ impl<W: LayoutElement> FloatingSpace<W> {
 
         let scale = Scale::from(self.scale);
         let res = ClosingWindow::new(
-            renderer, snapshot, scale, tile_size, tile_pos, blocker, anim,
+            renderer,
+            snapshot,
+            scale,
+            tile_size,
+            tile_pos,
+            blocker,
+            anim,
+            // As the workspace passes it to render().
+            Rectangle::from_size(self.view_size),
         );
         match res {
             Ok(closing) => {
