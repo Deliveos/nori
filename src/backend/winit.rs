@@ -20,12 +20,14 @@ use smithay::reexports::wayland_protocols::wp::presentation_time::server::wp_pre
 use smithay::reexports::winit::dpi::LogicalSize;
 use smithay::reexports::winit::platform::wayland::WindowAttributesWayland;
 use smithay::reexports::winit::window::WindowAttributes;
+use smithay::utils::Scale;
 use smithay::wayland::dmabuf::{DmabufFeedbackBuilder, DmabufGlobal};
 use smithay::wayland::presentation::Refresh;
 
 use super::{IpcOutputMap, OutputId, RenderResult};
 use crate::niri::{Niri, RedrawState, State};
 use crate::render_helpers::debug::draw_damage;
+use crate::render_helpers::opaque_limit::limit_opaque_regions;
 use crate::render_helpers::{resources, shaders, RenderCtx, RenderTarget};
 use crate::utils::{get_monotonic_time, logical_output, WinitScale};
 
@@ -336,6 +338,8 @@ impl Winit {
         }
 
         // Hand them over to winit.
+        let scale = Scale::from(output.current_scale().fractional_scale());
+        let elements = limit_opaque_regions(&elements, scale);
         let res = {
             let (renderer, mut framebuffer) = self.backend.bind().unwrap();
             // FIXME: currently impossible to call due to a mutable borrow.

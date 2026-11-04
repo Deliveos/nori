@@ -33,8 +33,10 @@ use crate::window::{InitialConfigureState, Mapped, ResolvedWindowRules, Unmapped
 /// 4th and the 5th power of the number of rects in measurements. The damage tracker then goes over
 /// the pieces on every frame (#182). In measurements, 16 nested rects made 481 pieces.
 ///
-/// The limit is per surface: the damage tracker goes over the pieces of all visible surfaces
-/// together, so many surfaces can still add up (the rest of #182).
+/// The limit is per surface. The damage tracker goes over the pieces of all visible surfaces
+/// together, so [`MAX_OPAQUE_RECTS_PER_RENDER`] also limits the pieces of one render.
+///
+/// [`MAX_OPAQUE_RECTS_PER_RENDER`]: crate::render_helpers::opaque_limit::MAX_OPAQUE_RECTS_PER_RENDER
 const MAX_OPAQUE_REGION_RECTS: usize = 16;
 
 /// Drops opaque regions with more than [`MAX_OPAQUE_REGION_RECTS`] rects from the surfaces that

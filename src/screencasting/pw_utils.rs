@@ -55,6 +55,7 @@ use zbus::object_server::SignalEmitter;
 
 use crate::dbus::mutter_screen_cast::{self, CursorMode};
 use crate::niri::{CastTarget, State};
+use crate::render_helpers::opaque_limit::limit_opaque_regions;
 use crate::render_helpers::{
     clear_dmabuf, encompassing_geo, render_and_download, render_and_download_with_damage,
     render_to_dmabuf, CaptureTexture, PendingDownload,
@@ -1422,11 +1423,14 @@ impl Cast {
         if self.cursor_mode == CursorMode::Metadata || self.cursor_mode == CursorMode::Hidden {
             elements = &elements[cursor_data.elem_count..];
         }
+        // Both damage trackers get the same view of the elements.
+        let elements = &limit_opaque_regions(elements, scale);
         let (damage, states) = damage_trackers.check.damage_output(1, elements).unwrap();
 
         if self.cursor_mode == CursorMode::Metadata {
+            let cursor_elements = limit_opaque_regions(&cursor_data.relocated, scale);
             let (damage, _states) = cursor_damage_tracker
-                .damage_output(1, &cursor_data.relocated)
+                .damage_output(1, &cursor_elements)
                 .unwrap();
             redraw_cursor = damage.is_some();
             has_cursor_update =

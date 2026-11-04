@@ -9,13 +9,14 @@ use niri_ipc::{PositionChange, SizeChange};
 use smithay::backend::allocator::Fourcc;
 use smithay::backend::renderer::damage::OutputDamageTracker;
 use smithay::backend::renderer::{Bind as _, Color32F, ExportMem as _};
-use smithay::utils::{Point, Size};
+use smithay::utils::{Point, Scale, Size};
 use wayland_client::protocol::wl_surface::WlSurface;
 
 use super::client::ClientId;
 use super::*;
 use crate::layout::ActivateWindow;
 use crate::niri::{Niri, State};
+use crate::render_helpers::opaque_limit::limit_opaque_regions;
 use crate::render_helpers::{copy_framebuffer, create_texture, RenderCtx, RenderTarget};
 
 fn format_tiles(niri: &Niri) -> String {
@@ -113,6 +114,8 @@ fn render_output(f: &mut Fixture, n: u8) -> Vec<u8> {
                 xray: None,
             };
             let elements = niri.render_to_vec(ctx, &output, false);
+            let scale = Scale::from(output.current_scale().fractional_scale());
+            let elements = limit_opaque_regions(&elements, scale);
 
             let mut damage_tracker = OutputDamageTracker::from_output(&output);
             let size = Size::from((1920, 1080));

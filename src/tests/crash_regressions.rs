@@ -1,14 +1,20 @@
+use niri_config::Config;
+use smithay::backend::renderer::damage::OutputDamageTracker;
+use smithay::backend::renderer::element::Element;
 use smithay::backend::renderer::utils::RendererSurfaceStateUserData;
 use smithay::reexports::wayland_protocols::xdg::shell::client::xdg_surface;
 use smithay::reexports::wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_shell_v1::Layer;
 use smithay::reexports::wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1;
 use smithay::reexports::wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1::Anchor;
-use smithay::utils::{Logical, Rectangle};
+use smithay::utils::{Logical, Rectangle, Scale};
 use smithay::wayland::compositor::{with_states, with_surface_tree_downward, TraversalAction};
 use wayland_client::protocol::wl_surface::WlSurface;
 use wayland_client::Proxy;
 
 use super::*;
+use crate::niri::State;
+use crate::render_helpers::opaque_limit::{limit_opaque_regions, MAX_OPAQUE_RECTS_PER_RENDER};
+use crate::render_helpers::{RenderCtx, RenderTarget};
 use crate::tests::client::{ClientId, LayerConfigureProps};
 
 #[test]
@@ -851,7 +857,8 @@ fn opaque_region_with_many_rects_on_sync_subsurface() {
     window.ack_last_and_commit();
     f.double_roundtrip(id);
 
-    // A synchronized subsurface with a translucent 200 × 200 buffer.
+    // A synchronized subsurface with a translucent single-pixel buffer, which the viewport makes
+    // 200 × 200.
     let state = &mut f.client(id).state;
     let child = state.create_surface();
     let subsurface =
@@ -884,7 +891,8 @@ fn opaque_region_with_many_rects_on_sync_subsurface() {
     assert_eq!(commit_child(&mut f, 17), [0, 0]);
 
     // Moving the subsurface makes smithay build its pieces again, without a commit of the
-    // subsurface itself.
+    // subsurface itself: the parent's commit applies the subsurface's cached state again, with the
+    // 17-rect region, which is dropped again.
     subsurface.set_position(10, 10);
     f.client(id).window(&surface).commit();
     f.double_roundtrip(id);
@@ -894,4 +902,154 @@ fn opaque_region_with_many_rects_on_sync_subsurface() {
     );
 
     assert_eq!(commit_child(&mut f, 3), [0, 3]);
+}
+
+/// Sets an opaque region on the 32 × 32 `surface`: `stripes` added horizontal stripes, one fewer
+/// subtracted vertical stripes, then the whole surface. smithay cuts it into 8 pieces for 2
+/// stripes and 18 for 3. Doesn't commit.
+fn set_striped_opaque_region(f: &mut Fixture, id: ClientId, surface: &WlSurface, stripes: i32) {
+    let state = &mut f.client(id).state;
+    let region = state
+        .compositor
+        .as_ref()
+        .unwrap()
+        .create_region(&state.qh, ());
+    for i in 0..stripes {
+        region.add(0, i * 4, 32, 2);
+    }
+    for i in 0..stripes - 1 {
+        region.subtract(i * 4 + 2, 0, 2, 32);
+    }
+    region.add(0, 0, 32, 32);
+    surface.set_opaque_region(Some(&region));
+    region.destroy();
+}
+
+/// Adds `n` synchronized 32 × 32 subsurfaces with opaque regions of `stripes` stripes on top of
+/// `parent`, side by side, and commits `parent`.
+fn add_striped_subsurfaces(
+    f: &mut Fixture,
+    id: ClientId,
+    parent: &WlSurface,
+    n: i32,
+    stripes: i32,
+) {
+    for i in 0..n {
+        let state = &mut f.client(id).state;
+        let child = state.create_surface();
+        let subsurface =
+            state
+                .subcompositor
+                .as_ref()
+                .unwrap()
+                .get_subsurface(&child, parent, &state.qh, ());
+        subsurface.set_position(i % 40 * 36, i / 40 * 36);
+        let viewport = state
+            .viewporter
+            .as_ref()
+            .unwrap()
+            .get_viewport(&child, &state.qh, ());
+        viewport.set_destination(32, 32);
+        set_striped_opaque_region(f, id, &child, stripes);
+        // smithay uses the opaque region only for buffers with alpha.
+        let state = &mut f.client(id).state;
+        let spbm = state.spbm.as_ref().unwrap();
+        let buffer = spbm.create_u32_rgba_buffer(0, 0, 0, 0, &state.qh, ());
+        child.attach(Some(&buffer), 0, 0);
+        child.commit();
+        // Keep the socket from filling up.
+        if i % 100 == 99 {
+            f.roundtrip(id);
+        }
+    }
+    // The subsurfaces' state applies when the parent commits.
+    f.client(id).window(parent).commit();
+    f.double_roundtrip(id);
+}
+
+/// Number of opaque rectangles that `elements` report at `scale`.
+fn opaque_rects(elements: &[impl Element], scale: Scale<f64>) -> usize {
+    elements
+        .iter()
+        .map(|elem| elem.opaque_regions(scale).len())
+        .sum()
+}
+
+/// Numbers of opaque rectangles that the elements of a frame of the first output report, before
+/// and after the limit that the backends apply.
+///
+/// Renders the frame twice and checks that a damage tracker given the limited elements finds
+/// nothing changed the second time.
+fn opaque_rects_in_frame(f: &mut Fixture) -> (usize, usize) {
+    let output = f.niri_output(1);
+    let State { backend, niri, .. } = f.niri_state();
+    niri.update_render_elements(Some(&output));
+    let scale = Scale::from(output.current_scale().fractional_scale());
+    backend
+        .with_primary_renderer(|renderer| {
+            let mut damage_tracker = OutputDamageTracker::from_output(&output);
+            let mut render = || {
+                let ctx = RenderCtx {
+                    renderer: &mut *renderer,
+                    target: RenderTarget::Output,
+                    xray: None,
+                };
+                let elements = niri.render_to_vec(ctx, &output, false);
+                let limited = limit_opaque_regions(&elements, scale);
+                let counts = (
+                    opaque_rects(&elements, scale),
+                    opaque_rects(&limited, scale),
+                );
+                let (damage, _) = damage_tracker.damage_output(1, &limited).unwrap();
+                (counts, damage.is_some())
+            };
+
+            let (counts, damaged) = render();
+            assert!(damaged);
+            let (counts_again, damaged) = render();
+            assert!(!damaged, "nothing changed between the two frames");
+            assert_eq!(counts, counts_again);
+            counts
+        })
+        .unwrap()
+}
+
+#[test]
+fn egl_opaque_regions_are_limited_per_frame() {
+    let mut config = Config::default();
+    config.hotkey_overlay.skip_at_startup = true;
+    let mut f = Fixture::with_config(config);
+    f.niri_state().backend.headless().add_renderer().unwrap();
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+
+    let window = f.client(id).create_window();
+    let surface = window.surface.clone();
+    window.commit();
+    f.roundtrip(id);
+    let window = f.client(id).window(&surface);
+    window.attach_new_buffer();
+    window.set_size(1500, 1000);
+    window.ack_last_and_commit();
+    f.double_roundtrip(id);
+    // Otherwise the tile is drawn through the opening animation's offscreen buffer, which reports
+    // no opaque regions.
+    f.niri_complete_animations();
+
+    // Before any subsurface: 3 elements with one rectangle each.
+    let (base, limited) = opaque_rects_in_frame(&mut f);
+    assert_eq!((base, limited), (3, 3));
+
+    // Under the limit, every element keeps its opaque regions.
+    add_striped_subsurfaces(&mut f, id, &surface, 1, 2);
+    assert_eq!(opaque_rects_in_frame(&mut f), (base + 8, base + 8));
+
+    // Over it, the frame has no more than the limit. Subsurfaces added later are on top, so the
+    // last of the new ones keeps its 18 rectangles, and the other 297 don't fit after it. The one
+    // with 8 pieces behind those and the 3 elements with one rectangle still do.
+    add_striped_subsurfaces(&mut f, id, &surface, 298, 3);
+    let (all, limited) = opaque_rects_in_frame(&mut f);
+    assert_eq!(all, base + 8 + 298 * 18);
+    assert_eq!(limited, 18 + 8 + base);
+    assert!(limited <= MAX_OPAQUE_RECTS_PER_RENDER);
 }

@@ -169,6 +169,7 @@ use crate::protocols::screencopy::{
 };
 use crate::render_helpers::blur::BlurOptions;
 use crate::render_helpers::debug::push_opaque_regions;
+use crate::render_helpers::opaque_limit::limit_opaque_regions;
 use crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement;
 use crate::render_helpers::renderer::NiriRenderer;
 use crate::render_helpers::solid_color::{SolidColorBuffer, SolidColorRenderElement};
@@ -5955,6 +5956,8 @@ impl Niri {
                             RelocateRenderElement::from_element(elem, offset, Relocate::Relative);
                         elements.push(elem);
                     });
+                    let scale = Scale::from(output.current_scale().fractional_scale());
+                    let elements = limit_opaque_regions(&elements, scale);
 
                     let (damages, states) = Self::damage_screencopy_internal(
                         output,
@@ -6033,6 +6036,8 @@ impl Niri {
             let elem = RelocateRenderElement::from_element(elem, offset, Relocate::Relative);
             elements.push(elem);
         });
+        let scale = Scale::from(output.current_scale().fractional_scale());
+        let elements = limit_opaque_regions(&elements, scale);
 
         let Some((damage_tracker, texture)) = self.screencopy_state.damage_tracker(manager) else {
             error!("screencopy queue must not be deleted as long as frames exist");
@@ -6123,6 +6128,7 @@ impl Niri {
                 });
                 elements
             });
+            let elements = &limit_opaque_regions(elements, scale);
 
             let (damage, states) = s.damage_tracker.damage_output(1, elements).unwrap();
             let Some(damage) = damage else {
@@ -6254,6 +6260,7 @@ impl Niri {
 
             let elements = cached_elements
                 .get_or_insert_with(|| self.render_cursor_for_capture(renderer, output));
+            let elements = &limit_opaque_regions(elements, scale);
 
             let (damage, states) = s.damage_tracker.damage_output(1, elements).unwrap();
             if damage.is_none() {
