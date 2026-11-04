@@ -3,7 +3,8 @@ use smithay::reexports::wayland_protocols::xdg::shell::client::xdg_surface;
 use smithay::reexports::wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_shell_v1::Layer;
 use smithay::reexports::wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1;
 use smithay::reexports::wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1::Anchor;
-use smithay::wayland::compositor::{with_surface_tree_downward, TraversalAction};
+use smithay::utils::{Logical, Rectangle};
+use smithay::wayland::compositor::{with_states, with_surface_tree_downward, TraversalAction};
 use wayland_client::protocol::wl_surface::WlSurface;
 use wayland_client::Proxy;
 
@@ -752,6 +753,86 @@ fn opaque_region_with_many_rects() {
 
     // A smaller region afterwards is used again.
     assert_eq!(commit_with_new_buffer(&mut f, 2, 0), [2]);
+}
+
+/// Opaque pieces that smithay made for the first window's surface.
+fn root_opaque_pieces(f: &mut Fixture) -> Vec<Rectangle<i32, Logical>> {
+    let (_, mapped) = f.niri().layout.windows().next().unwrap();
+    with_states(mapped.toplevel().wl_surface(), |states| {
+        let data = states.data_map.get::<RendererSurfaceStateUserData>();
+        let data = data.unwrap().lock().unwrap();
+        data.opaque_regions()
+            .map_or_else(Vec::new, |pieces| pieces.to_vec())
+    })
+}
+
+#[test]
+fn opaque_region_pieces_cover_the_region_once() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+
+    let window = f.client(id).create_window();
+    let surface = window.surface.clone();
+    window.commit();
+    f.roundtrip(id);
+    let window = f.client(id).window(&surface);
+    window.attach_new_buffer();
+    window.set_size(200, 200);
+    window.ack_last_and_commit();
+    f.double_roundtrip(id);
+
+    // `(add, x, y, w, h)` for each rect of the region.
+    let mut pieces_for = |rects: &[(bool, i32, i32, i32, i32)]| {
+        let state = &mut f.client(id).state;
+        let region = state
+            .compositor
+            .as_ref()
+            .unwrap()
+            .create_region(&state.qh, ());
+        for &(add, x, y, w, h) in rects {
+            if add {
+                region.add(x, y, w, h);
+            } else {
+                region.subtract(x, y, w, h);
+            }
+        }
+        surface.set_opaque_region(Some(&region));
+        region.destroy();
+        let window = f.client(id).window(&surface);
+        window.attach_new_buffer();
+        window.commit();
+        f.double_roundtrip(id);
+        root_opaque_pieces(&mut f)
+    };
+
+    // The pieces don't overlap, and their area is the region's.
+    let check = |pieces: &[Rectangle<i32, Logical>], area: i32| {
+        for (i, a) in pieces.iter().enumerate() {
+            for b in &pieces[i + 1..] {
+                assert!(!a.overlaps(*b), "{a:?} overlaps {b:?} in {pieces:?}");
+            }
+        }
+        let sum: i32 = pieces.iter().map(|r| r.size.w * r.size.h).sum();
+        assert_eq!(sum, area, "{pieces:?}");
+    };
+
+    // smithay's subtract_rects_many_in_place used to skip some rects after cutting others, so an
+    // added rect could overlap a piece (#281).
+    let pieces = pieces_for(&[
+        (true, 2, 4, 2, 2),
+        (true, 6, 0, 2, 10),
+        (true, 0, 0, 10, 10),
+    ]);
+    check(&pieces, 100);
+
+    // And an area that the client subtracted could stay opaque.
+    let pieces = pieces_for(&[
+        (true, 0, 0, 10, 10),
+        (false, 2, 4, 2, 2),
+        (false, 6, 0, 2, 10),
+    ]);
+    check(&pieces, 100 - 2 * 2 - 2 * 10);
 }
 
 #[test]
