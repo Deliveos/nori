@@ -1753,6 +1753,7 @@ impl<W: LayoutElement> Workspace<W> {
                     xray,
                     xray_has_blocked_out_layers,
                     xray_pos,
+                    view_rect,
                 );
                 return;
             }

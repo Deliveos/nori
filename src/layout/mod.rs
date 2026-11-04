@@ -4419,6 +4419,15 @@ impl<W: LayoutElement> Layout<W> {
         }
     }
 
+    /// The tile being moved interactively, once it has left its workspace.
+    #[cfg(test)]
+    pub fn interactive_moved_tile(&self) -> Option<&Tile<W>> {
+        match &self.interactive_move {
+            Some(InteractiveMoveState::Moving(move_)) => Some(&move_.tile),
+            _ => None,
+        }
+    }
+
     pub fn interactive_move_is_moving_above_output(&self, output: &Output) -> bool {
         let Some(InteractiveMoveState::Moving(move_)) = &self.interactive_move else {
             return false;
@@ -4740,6 +4749,21 @@ impl<W: LayoutElement> Layout<W> {
 
         let zoom = self.overview_zoom();
 
+        // The closing animation of a dragged tile is drawn in the workspace under the pointer, at
+        // the tile's position relative to that workspace, and cut with that workspace's view (see
+        // start_close_animation_for_window()). Cut the snapshot with the same view, so that it has
+        // what the closing animation shows.
+        let close_view = match &self.interactive_move {
+            Some(InteractiveMoveState::Moving(move_)) if move_.tile.window().id() == window => self
+                .monitor_for_output(&move_.output)
+                .and_then(|mon| mon.workspace_under(move_.pointer_pos_within_output))
+                .map(|(ws, ws_geo)| {
+                    let tile_pos = move_.tile_render_location(zoom) - ws_geo.loc;
+                    Rectangle::new(tile_pos.upscale(-1.), ws.view_size())
+                }),
+            _ => None,
+        };
+
         if let Some(InteractiveMoveState::Moving(move_)) = &mut self.interactive_move {
             if move_.tile.window().id() == window {
                 let pos_within_output = move_.tile_render_location(zoom);
@@ -4755,6 +4779,7 @@ impl<W: LayoutElement> Layout<W> {
                     xray,
                     xray_has_blocked_out_layers,
                     XrayPos::new(pos_within_output, zoom),
+                    close_view.unwrap_or(view_rect),
                 );
                 return;
             }
@@ -4904,9 +4929,14 @@ impl<W: LayoutElement> Layout<W> {
         let pos_in_backdrop = move_.tile_render_location(zoom);
         let xray_pos = XrayPos::new(pos_in_backdrop, zoom);
 
+        // What the output shows of the tile, which is zoomed around its location. Computation
+        // matches update_render_elements().
+        let view = Rectangle::new(pos_in_backdrop.upscale(-1.), output_size(&move_.output))
+            .downscale(zoom);
+
         move_
             .tile
-            .render(ctx, pos_in_backdrop, xray_pos, true, &mut |elem| {
+            .render_in_view(ctx, pos_in_backdrop, view, xray_pos, true, &mut |elem| {
                 push(RescaleRenderElement::from_element(
                     elem,
                     pos_in_backdrop.to_physical_precise_round(scale),

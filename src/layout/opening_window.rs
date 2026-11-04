@@ -52,8 +52,18 @@ impl OpenAnimation {
         self.anim.is_done()
     }
 
+    #[cfg(test)]
+    pub fn texture_size(&self) -> Option<Size<i32, smithay::utils::Buffer>> {
+        self.buffer.texture_size()
+    }
+
     // We can't depend on view_rect here, because the result of window opening can be snapshot and
     // then rendered elsewhere.
+    //
+    // Only the part of `elements` inside `clip` goes into the offscreen texture. The tile picks
+    // `clip` around the view, which matters only for a tile larger than the view. For a snapshot,
+    // the tile is rendered at the origin, and its caller passes the view relative to the tile.
+    #[allow(clippy::too_many_arguments)]
     pub fn render(
         &self,
         renderer: &mut GlesRenderer,
@@ -62,13 +72,14 @@ impl OpenAnimation {
         location: Point<f64, Logical>,
         scale: Scale<f64>,
         alpha: f32,
+        clip: Rectangle<f64, Logical>,
     ) -> anyhow::Result<(OpeningWindowRenderElement, OffscreenData)> {
         let progress = self.anim.value();
         let clamped_progress = self.anim.clamped_value().clamp(0., 1.);
 
         let (elem, _sync_point, mut data) = self
             .buffer
-            .render(renderer, scale, elements)
+            .render(renderer, scale, elements, clip)
             .context("error rendering to offscreen buffer")?;
 
         if Shaders::get(renderer).program(ProgramType::Open).is_some() {

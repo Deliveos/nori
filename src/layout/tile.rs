@@ -29,7 +29,10 @@ use crate::render_helpers::shadow::ShadowRenderElement;
 use crate::render_helpers::snapshot::RenderSnapshot;
 use crate::render_helpers::solid_color::{SolidColorBuffer, SolidColorRenderElement};
 use crate::render_helpers::xray::{Xray, XrayPos};
-use crate::render_helpers::{RenderCtx, RenderTarget};
+use crate::render_helpers::{
+    limit_view_size, offscreen_clip, offscreen_clip_in_view, resize_texture_max_size, RenderCtx,
+    RenderTarget,
+};
 use crate::utils::transaction::Transaction;
 use crate::utils::{
     baba_is_float_offset, round_logical_in_physical, round_logical_in_physical_max1,
@@ -912,22 +915,32 @@ impl<W: LayoutElement> Tile<W> {
         size
     }
 
-    /// Horizontal extent of what `render()` draws, relative to its `location`, not counting popups
-    /// and subsurfaces outside the window geometry.
-    pub fn render_extent_x(&self) -> (f64, f64) {
-        let w = self.animated_tile_size().w;
-        let mut extent = (0., w);
-        let mut add = |start: f64, end: f64| {
-            extent = (f64::min(extent.0, start), f64::max(extent.1, end));
-        };
+    /// Area that the tile itself draws, relative to its `location`: the tile with its border, the
+    /// focus ring and the shadow, not counting popups and subsurfaces outside the window geometry.
+    pub fn drawn_rect(&self) -> Rectangle<f64, Logical> {
+        let size = self.animated_tile_size();
+        let mut rect = Rectangle::from_size(size);
 
         if !self.focus_ring.is_off() {
             let width = self.focus_ring.width();
-            add(-width, w + width);
+            let ring = Rectangle::new(
+                Point::from((-width, -width)),
+                size + Size::from((width, width)).upscale(2.),
+            );
+            rect = rect.merge(ring);
         }
-        for rect in self.shadow.rendered_rects() {
-            add(rect.loc.x, rect.loc.x + rect.size.w);
+        for shadow in self.shadow.rendered_rects() {
+            rect = rect.merge(*shadow);
         }
+
+        rect
+    }
+
+    /// Horizontal extent of what `render()` draws, relative to its `location`, not counting popups
+    /// and subsurfaces outside the window geometry.
+    pub fn render_extent_x(&self) -> (f64, f64) {
+        let rect = self.drawn_rect();
+        let mut extent = (rect.loc.x, rect.loc.x + rect.size.w);
 
         if self.open_animation.is_some() {
             // A custom open shader can draw past the rendered window.
@@ -1177,11 +1190,22 @@ impl<W: LayoutElement> Tile<W> {
 
         // If we're resizing, try to render a shader, or a fallback.
         let mut pushed_resize = false;
-        if let Some(resize) = &self.resize_animation {
+        // The resize shader stretches each texture over the whole animated area, so a texture cut
+        // short of its window would leave part of the area empty. A window that doesn't fit into
+        // its texture's clip is drawn as is instead, like without a resize animation.
+        let max_size = resize_texture_max_size(self.view_size);
+        let window_rect = Rectangle::from_size(window_size);
+        let clip_current = offscreen_clip(window_rect, max_size);
+        let resize = self.resize_animation.as_ref().filter(|resize| {
+            let extent_from = resize.snapshot.extent;
+            clip_current.contains_rect(window_rect)
+                && offscreen_clip(extent_from, max_size).contains_rect(extent_from)
+        });
+        if let Some(resize) = resize {
             if ResizeRenderElement::has_shader(ctx.renderer) {
                 let mut ctx = ctx.as_gles();
 
-                if let Some(texture_from) = resize.snapshot.texture(ctx.r(), scale) {
+                if let Some(texture_from) = resize.snapshot.texture(ctx.r(), scale, max_size) {
                     let mut window_elements = Vec::new();
                     self.window.render_normal(
                         ctx.r(),
@@ -1193,7 +1217,7 @@ impl<W: LayoutElement> Tile<W> {
 
                     let current = resize
                         .offscreen
-                        .render(ctx.renderer, scale, &window_elements)
+                        .render(ctx.renderer, scale, &window_elements, clip_current)
                         .map_err(|err| warn!("error rendering window to texture: {err:?}"))
                         .ok();
 
@@ -1407,8 +1431,30 @@ impl<W: LayoutElement> Tile<W> {
 
     pub fn render<R: NiriRenderer>(
         &self,
+        ctx: RenderCtx<R>,
+        location: Point<f64, Logical>,
+        xray_pos: XrayPos,
+        focus_ring: bool,
+        push: &mut dyn FnMut(TileRenderElement<R>),
+    ) {
+        // The view relative to the tile. In the overview, more than this is visible, and the
+        // default open and close animations zoom the tile, which matters only for a tile larger
+        // than the view.
+        let view = Rectangle::new(location.upscale(-1.), self.view_size);
+        self.render_in_view(ctx, location, view, xray_pos, focus_ring, push);
+    }
+
+    /// Renders the tile at `location`, with `view` relative to the tile for cutting the offscreen
+    /// textures of the open and alpha animations.
+    ///
+    /// `view` is what is shown of the tile. It can be larger than the tile's view size, for a tile
+    /// dragged in the zoomed-out overview. The textures are then cut with a part of it at most as
+    /// large as the view size, see [`limit_view_size()`], so they stay within the same bound.
+    pub fn render_in_view<R: NiriRenderer>(
+        &self,
         mut ctx: RenderCtx<R>,
         location: Point<f64, Logical>,
+        view: Rectangle<f64, Logical>,
         xray_pos: XrayPos,
         focus_ring: bool,
         push: &mut dyn FnMut(TileRenderElement<R>),
@@ -1416,6 +1462,7 @@ impl<W: LayoutElement> Tile<W> {
         let _span = tracy_client::span!("Tile::render");
 
         let scale = Scale::from(self.scale);
+        let view = limit_view_size(self.drawn_rect(), view, self.view_size);
 
         let tile_alpha = self
             .alpha_animation
@@ -1442,6 +1489,7 @@ impl<W: LayoutElement> Tile<W> {
                 location,
                 scale,
                 tile_alpha,
+                offscreen_clip_in_view(self.drawn_rect(), view),
             ) {
                 Ok((elem, data)) => {
                     self.window().set_offscreen_data(Some(data));
@@ -1462,7 +1510,8 @@ impl<W: LayoutElement> Tile<W> {
                 focus_ring,
                 &mut |elem| elements.push(elem),
             );
-            match alpha.offscreen.render(ctx.renderer, scale, &elements) {
+            let clip = offscreen_clip_in_view(self.drawn_rect(), view);
+            match alpha.offscreen.render(ctx.renderer, scale, &elements, clip) {
                 Ok((elem, _sync, data)) => {
                     let offset = elem.offset();
                     let elem = elem.with_alpha(tile_alpha).with_offset(location + offset);
@@ -1482,19 +1531,30 @@ impl<W: LayoutElement> Tile<W> {
         }
     }
 
+    /// Stores a snapshot of the tile for its closing animation, unless there is one already.
+    ///
+    /// `view_rect` is the view relative to the tile that the closing animation will be drawn in.
+    /// The tile is rendered at the origin, but its open and alpha animations cut their textures
+    /// around this view.
     pub fn store_unmap_snapshot_if_empty(
         &mut self,
         renderer: &mut GlesRenderer,
         xray: Option<&mut Xray>,
         xray_has_blocked_out_layers: bool,
         xray_pos: XrayPos,
+        view_rect: Rectangle<f64, Logical>,
     ) {
         if self.unmap_snapshot.is_some() {
             return;
         }
 
-        self.unmap_snapshot =
-            Some(self.render_snapshot(renderer, xray, xray_has_blocked_out_layers, xray_pos));
+        self.unmap_snapshot = Some(self.render_snapshot(
+            renderer,
+            xray,
+            xray_has_blocked_out_layers,
+            xray_pos,
+            view_rect,
+        ));
     }
 
     fn render_snapshot(
@@ -1503,17 +1563,19 @@ impl<W: LayoutElement> Tile<W> {
         mut xray: Option<&mut Xray>,
         xray_has_blocked_out_layers: bool,
         xray_pos: XrayPos,
+        view: Rectangle<f64, Logical>,
     ) -> TileRenderSnapshot {
         let _span = tracy_client::span!("Tile::render_snapshot");
 
         let mut contents = Vec::new();
-        self.render(
+        self.render_in_view(
             RenderCtx {
                 target: RenderTarget::Output,
                 renderer,
                 xray: xray.as_deref(),
             },
             Point::from((0., 0.)),
+            view,
             xray_pos,
             false,
             &mut |elem| contents.push(elem),
@@ -1558,13 +1620,14 @@ impl<W: LayoutElement> Tile<W> {
                 xray.backdrop[output_idx] = screencast_backdrop.clone().unwrap();
 
                 let mut contents = Vec::new();
-                self.render(
+                self.render_in_view(
                     RenderCtx {
                         target: RenderTarget::Output,
                         renderer,
                         xray: Some(xray),
                     },
                     Point::from((0., 0.)),
+                    view,
                     xray_pos,
                     false,
                     &mut |elem| contents.push(elem),
@@ -1582,13 +1645,14 @@ impl<W: LayoutElement> Tile<W> {
         let block_out_from = self.window.rules().block_out_from;
         let mut blocked_out_contents = Vec::new();
         if block_out_from.is_some() {
-            self.render(
+            self.render_in_view(
                 RenderCtx {
                     target: RenderTarget::Screencast,
                     renderer,
                     xray: xray.as_deref(),
                 },
                 Point::from((0., 0.)),
+                view,
                 xray_pos,
                 false,
                 &mut |elem| blocked_out_contents.push(elem),
@@ -1612,6 +1676,7 @@ impl<W: LayoutElement> Tile<W> {
             blocked_out_contents,
             block_out_from,
             size: self.animated_tile_size(),
+            extent: self.drawn_rect(),
             texture: Default::default(),
             texture_with_blocked_out_bg: Default::default(),
             blocked_out_texture: Default::default(),
@@ -1637,6 +1702,26 @@ impl<W: LayoutElement> Tile<W> {
     #[cfg(test)]
     pub fn view_size(&self) -> Size<f64, Logical> {
         self.view_size
+    }
+
+    /// Size of the texture that the open animation renders the tile into, once it has rendered.
+    #[cfg(test)]
+    pub fn open_animation_texture_size(&self) -> Option<Size<i32, smithay::utils::Buffer>> {
+        self.open_animation.as_ref()?.texture_size()
+    }
+
+    /// Area of the window that the starting texture of the resize animation covers, once it is
+    /// rendered.
+    #[cfg(test)]
+    pub fn resize_animation_texture_geo(&self) -> Option<Rectangle<i32, smithay::utils::Physical>> {
+        let resize = self.resize_animation.as_ref()?;
+        Some(resize.snapshot.texture.get()?.as_ref()?.1)
+    }
+
+    /// Size of the texture that the alpha animation renders the tile into, once it has rendered.
+    #[cfg(test)]
+    pub fn alpha_animation_texture_size(&self) -> Option<Size<i32, smithay::utils::Buffer>> {
+        self.alpha_animation.as_ref()?.offscreen.texture_size()
     }
 
     #[cfg(test)]

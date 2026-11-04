@@ -21,7 +21,9 @@ use crate::render_helpers::shader_element::ShaderRenderElement;
 use crate::render_helpers::shaders::{mat3_uniform, ProgramType, Shaders};
 use crate::render_helpers::snapshot::RenderSnapshot;
 use crate::render_helpers::texture::{TextureBuffer, TextureRenderElement};
-use crate::render_helpers::{render_to_encompassing_texture, RenderCtx, RenderTarget};
+use crate::render_helpers::{
+    offscreen_clip_in_view, render_to_encompassing_texture, RenderCtx, RenderTarget,
+};
 use crate::utils::transaction::TransactionBlocker;
 
 #[derive(Debug)]
@@ -96,6 +98,11 @@ impl AnimationState {
 }
 
 impl ClosingWindow {
+    /// Creates the closing animation from a snapshot of the tile.
+    ///
+    /// `view_rect` is the view as [`Self::render()`] gets it right now. What the snapshot holds
+    /// far from the view is left out, see [`offscreen_clip_in_view()`].
+    #[allow(clippy::too_many_arguments)]
     pub fn new<E: RenderElement<GlesRenderer>>(
         renderer: &mut GlesRenderer,
         snapshot: RenderSnapshot<E, E>,
@@ -104,9 +111,14 @@ impl ClosingWindow {
         pos: Point<f64, Logical>,
         blocker: TransactionBlocker,
         anim: Animation,
+        view_rect: Rectangle<f64, Logical>,
     ) -> anyhow::Result<Self> {
         let _span = tracy_client::span!("ClosingWindow::new");
 
+        // The view relative to the tile. Like render(), only use the x of the view position.
+        let view_loc = Point::from((view_rect.loc.x, 0.)) - pos;
+        let view = Rectangle::new(view_loc, view_rect.size);
+        let clip = offscreen_clip_in_view(snapshot.extent, view);
         let mut render_to_texture = |elements: Vec<E>| -> anyhow::Result<_> {
             let (texture, _sync_point, geo) = render_to_encompassing_texture(
                 renderer,
@@ -114,6 +126,7 @@ impl ClosingWindow {
                 Transform::Normal,
                 Fourcc::Abgr8888,
                 &elements,
+                Some(clip),
             )
             .context("error rendering to texture")?;
 
