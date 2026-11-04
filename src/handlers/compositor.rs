@@ -152,6 +152,7 @@ impl CompositorHandler for State {
                         is_full_width,
                         output,
                         workspace_name,
+                        workspace_from_rule: _,
                         is_pending_maximized,
                     } = state
                     {
