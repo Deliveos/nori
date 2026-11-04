@@ -10,8 +10,8 @@ use smithay::reexports::wayland_server::{Client, Resource};
 use smithay::wayland::buffer::BufferHandler;
 use smithay::wayland::compositor::{
     add_blocker, add_pre_commit_hook, get_parent, is_sync_subsurface, remove_pre_commit_hook,
-    with_states, BufferAssignment, CompositorClientState, CompositorHandler, CompositorState,
-    SurfaceAttributes,
+    with_states, with_surface_tree_upward, BufferAssignment, CompositorClientState,
+    CompositorHandler, CompositorState, SurfaceAttributes, TraversalAction,
 };
 use smithay::wayland::dmabuf::get_dmabuf;
 use smithay::wayland::shell::xdg::ToplevelCachedState;
@@ -24,6 +24,50 @@ use crate::niri::{CastTarget, ClientState, LockState, State};
 use crate::utils::transaction::Transaction;
 use crate::utils::{is_mapped, send_scale_transform};
 use crate::window::{InitialConfigureState, Mapped, ResolvedWindowRules, Unmapped};
+
+/// Most rects in an opaque region that smithay turns into pieces.
+///
+/// Whenever a surface gets a new buffer or its surface view changes (viewport, subsurface position
+/// or client scale), smithay cuts its opaque region into pieces. The number of pieces can grow
+/// quadratically with the number of rects, and building them took time growing with between the
+/// 4th and the 5th power of the number of rects in measurements. The damage tracker then goes over
+/// the pieces on every frame (#182). In measurements, 16 nested rects made 481 pieces.
+///
+/// The limit is per surface: the damage tracker goes over the pieces of all visible surfaces
+/// together, so many surfaces can still add up (the rest of #182).
+const MAX_OPAQUE_REGION_RECTS: usize = 16;
+
+/// Drops opaque regions with more than [`MAX_OPAQUE_REGION_RECTS`] rects from the surfaces that
+/// `on_commit_buffer_handler` is about to update.
+///
+/// An opaque region is only an optimization, so dropping it is always correct: the surface is
+/// drawn as if it had none.
+fn drop_complex_opaque_regions(surface: &WlSurface) {
+    // on_commit_buffer_handler() skips sync subsurfaces in the same way, and handles them as part
+    // of the parent's tree when the parent commits.
+    if is_sync_subsurface(surface) {
+        return;
+    }
+
+    with_surface_tree_upward(
+        surface,
+        (),
+        |_, _, _| TraversalAction::DoChildren(()),
+        |_, states, _| {
+            let mut guard = states.cached_state.get::<SurfaceAttributes>();
+            let attrs = guard.current();
+            if attrs
+                .opaque_region
+                .as_ref()
+                .is_some_and(|region| region.rects.len() > MAX_OPAQUE_REGION_RECTS)
+            {
+                trace!("ignoring an opaque region with too many rects");
+                attrs.opaque_region = None;
+            }
+        },
+        |_, _, _| true,
+    );
+}
 
 impl CompositorHandler for State {
     fn compositor_state(&mut self) -> &mut CompositorState {
@@ -58,6 +102,7 @@ impl CompositorHandler for State {
         let _span = trace_span!("commit", surface = %surface.id()).entered();
         trace!("commit");
 
+        drop_complex_opaque_regions(surface);
         on_commit_buffer_handler::<Self>(surface);
         self.backend.early_import(surface);
 
