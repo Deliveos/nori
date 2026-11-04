@@ -4,7 +4,7 @@
 //! crucial parts like dmabufs.
 
 use std::mem;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use anyhow::Context as _;
 use niri_config::OutputName;
@@ -29,6 +29,28 @@ pub struct Headless {
     ipc_outputs: Arc<Mutex<IpcOutputMap>>,
 }
 
+/// Creates a surfaceless EGL display, keeping one handle to it alive until the process exits.
+///
+/// Every surfaceless `EGLDisplay` is the same EGL display, and smithay calls `eglTerminate` when
+/// the last handle to it is dropped, without taking the lock that `EGLDisplay::new` takes. So when
+/// one test dropped its last renderer while another test was in `EGLDisplay::new`, the display
+/// could be terminated under the second test (#263). With a handle that is never dropped,
+/// `eglTerminate` is never called. Creating displays under `KEPT` makes sure that the first one is
+/// kept before another test can get the same display.
+///
+/// # Safety
+///
+/// Same as `EGLDisplay::new`.
+unsafe fn surfaceless_egl_display() -> anyhow::Result<EGLDisplay> {
+    static KEPT: Mutex<Option<EGLDisplay>> = Mutex::new(None);
+
+    let mut kept = KEPT.lock().unwrap_or_else(PoisonError::into_inner);
+    let display =
+        unsafe { EGLDisplay::new(EGLSurfacelessDisplay) }.context("error creating EGL display")?;
+    kept.get_or_insert_with(|| display.clone());
+    Ok(display)
+}
+
 impl Headless {
     pub fn new() -> Self {
         Self {
@@ -48,8 +70,7 @@ impl Headless {
         }
 
         let mut renderer = unsafe {
-            let display =
-                EGLDisplay::new(EGLSurfacelessDisplay).context("error creating EGL display")?;
+            let display = surfaceless_egl_display()?;
             let context = EGLContext::new(&display).context("error creating EGL context")?;
             GlesRenderer::new(context).context("error creating renderer")?
         };
@@ -172,5 +193,28 @@ impl Headless {
 impl Default for Headless {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use smithay::backend::egl::ffi;
+
+    use super::*;
+
+    // #263: dropping the last renderer must not terminate the EGL display, because another test
+    // can be creating a renderer on the same display at the same time.
+    #[test]
+    fn egl_display_stays_initialized_after_last_renderer_is_dropped() {
+        let mut headless = Headless::new();
+        headless.add_renderer().unwrap();
+        let renderer = headless.renderer.take().unwrap();
+        let display = renderer.egl_context().display().get_display_handle().handle;
+        drop(renderer);
+        drop(headless);
+
+        // eglQueryString() fails with EGL_NOT_INITIALIZED on a terminated display.
+        let vendor = unsafe { ffi::egl::QueryString(display, ffi::egl::VENDOR as i32) };
+        assert!(!vendor.is_null(), "EGL display was terminated");
     }
 }
