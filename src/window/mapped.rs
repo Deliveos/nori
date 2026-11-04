@@ -622,36 +622,105 @@ impl Mapped {
     /// Returns the area to cast of the window: its surfaces and popups, cropped around the window
     /// geometry to at most `max_size` rounded up to whole logical pixels, then converted to
     /// physical pixels rounding outwards. On an axis where the window geometry itself is larger
-    /// than `max_size`, only its start is kept.
+    /// than `max_size`, only its start is kept. With a `held` area (see below), the room around
+    /// the window can also hold surfaces and popups that went away.
     ///
     /// The client decides where its subsurfaces and popups go and how large its window geometry
     /// is (without one set, it's the bounding box of the surface and its subsurfaces), so without
     /// the crop, the cast buffers could be huge.
+    ///
+    /// `held` keeps the area of the surfaces and popups between calls for the same window, so that
+    /// the area doesn't shrink when a surface or popup outside the window geometry goes away, until
+    /// the window geometry changes. Otherwise the stream would be resized each time such a popup
+    /// opens or closes. The held area only fills the room that what the window shows now leaves.
+    /// When it's cropped, the area stays where it was on each axis while it has the same length
+    /// there and still holds what the window shows now there. On each axis, its physical length
+    /// stays the largest seen since its logical length on that axis or the scale last changed.
     pub fn cast_bbox(
         &self,
         scale: Scale<f64>,
         max_size: Size<f64, Logical>,
+        held: &mut Option<HeldCastArea>,
     ) -> Rectangle<i32, Physical> {
-        let bbox = self.window.bbox_with_popups();
+        let current = self.window.bbox_with_popups();
         let geo = self.window.geometry();
+        let window_id = self.id().get();
+        if held
+            .as_ref()
+            .is_some_and(|held| held.window_id != window_id || held.geo != geo)
+        {
+            *held = None;
+        }
+        let held = held.get_or_insert_with(|| HeldCastArea {
+            window_id,
+            geo,
+            bbox: current,
+            area: None,
+            physical: None,
+        });
+        held.bbox = held.bbox.merge(current);
         let max_size = max_size.to_i32_ceil();
 
-        let (x, w) = crop_axis(
-            (bbox.loc.x, bbox.size.w),
-            (geo.loc.x, geo.size.w),
-            max_size.w,
-        );
-        let (y, h) = crop_axis(
-            (bbox.loc.y, bbox.size.h),
-            (geo.loc.y, geo.size.h),
-            max_size.h,
-        );
-        Rectangle::new(Point::new(x, y), Size::new(w, h)).to_physical_precise_up(scale)
+        let crop = |bbox: Rectangle<i32, Logical>, keep: Rectangle<i32, Logical>| {
+            let (x, w) = crop_axis(
+                (bbox.loc.x, bbox.size.w),
+                (keep.loc.x, keep.size.w),
+                max_size.w,
+            );
+            let (y, h) = crop_axis(
+                (bbox.loc.y, bbox.size.h),
+                (keep.loc.y, keep.size.h),
+                max_size.h,
+            );
+            Rectangle::new(Point::new(x, y), Size::new(w, h))
+        };
+        // First what the window shows now around its geometry, then the held area around that.
+        let current = crop(current, geo);
+        let mut area = crop(held.bbox, current);
+
+        // When the held area is larger than `max_size`, the crop above follows what the window
+        // shows now. On each axis, keep the area where it was while it has the same length and
+        // still holds that, so that the window doesn't move inside the cast when a popup closes.
+        // A new length, as with another `max_size`, places the area again.
+        if let Some(last) = held.area {
+            if last.size.w == area.size.w
+                && span_holds((last.loc.x, last.size.w), (current.loc.x, current.size.w))
+            {
+                area.loc.x = last.loc.x;
+            }
+            if last.size.h == area.size.h
+                && span_holds((last.loc.y, last.size.h), (current.loc.y, current.size.h))
+            {
+                area.loc.y = last.loc.y;
+            }
+        }
+        held.area = Some(area);
+
+        // At a fractional scale, the same logical length can round out to one more physical pixel
+        // at another position. On each axis, keep the larger one seen since the logical length or
+        // the scale last changed, so that the stream isn't resized back and forth for that. The
+        // first time it rounds out larger, it still grows.
+        let mut rect: Rectangle<i32, Physical> = area.to_physical_precise_up(scale);
+        if let Some(last) = held.physical.filter(|last| last.scale == scale) {
+            if last.logical.w == area.size.w {
+                rect.size.w = rect.size.w.max(last.physical.w);
+            }
+            if last.logical.h == area.size.h {
+                rect.size.h = rect.size.h.max(last.physical.h);
+            }
+        }
+        held.physical = Some(HeldCastSize {
+            scale,
+            logical: area.size,
+            physical: rect.size,
+        });
+        rect
     }
 
     /// Area of a window screenshot, in the same space as [`Self::cast_bbox()`]: `drawn`, the
     /// bounding box of what is drawn for the window, cut to the cast area that
-    /// [`Self::cast_bbox()`] gives for `max_size`.
+    /// [`Self::cast_bbox()`] gives for `max_size` without a held area, so for what the window
+    /// shows now.
     ///
     /// Popups are placed on whole physical pixels before their own size is rounded, so at a
     /// fractional scale they can reach one pixel past the window's bounding box rounded out. On
@@ -663,7 +732,7 @@ impl Mapped {
         drawn: Rectangle<i32, Physical>,
     ) -> Rectangle<i32, Physical> {
         let full = self.window.bbox_with_popups().to_physical_precise_up(scale);
-        let crop = self.cast_bbox(scale, max_size);
+        let crop = self.cast_bbox(scale, max_size, &mut None);
         let (x, w) = cut_span(
             (drawn.loc.x, drawn.size.w),
             (full.loc.x, full.size.w),
@@ -1648,6 +1717,37 @@ impl LayoutElement for Mapped {
             }
         });
     }
+}
+
+/// Area of a window cast kept between frames, see [`Mapped::cast_bbox()`].
+#[derive(Debug)]
+pub struct HeldCastArea {
+    window_id: u64,
+    /// Window geometry when the area was first found.
+    geo: Rectangle<i32, Logical>,
+    /// Bounding box of the surfaces and popups seen since then.
+    bbox: Rectangle<i32, Logical>,
+    /// Area that was cast last, cropped.
+    area: Option<Rectangle<i32, Logical>>,
+    /// Size of the area that was cast last.
+    physical: Option<HeldCastSize>,
+}
+
+/// Size of a window cast area, see [`HeldCastArea`].
+#[derive(Debug, Clone, Copy)]
+struct HeldCastSize {
+    scale: Scale<f64>,
+    logical: Size<i32, Logical>,
+    /// On each axis, the largest physical length seen since the logical length on that axis or
+    /// the scale last changed.
+    physical: Size<i32, Physical>,
+}
+
+/// Whether the span `(start, len)` holds the span `(inner_start, inner_len)`.
+fn span_holds((start, len): (i32, i32), (inner_start, inner_len): (i32, i32)) -> bool {
+    let end = i64::from(start) + i64::from(len);
+    let inner_end = i64::from(inner_start) + i64::from(inner_len);
+    start <= inner_start && inner_end <= end
 }
 
 /// Crops the span `(start, len)` to at most `max`, keeping `keep` and splitting the rest between
