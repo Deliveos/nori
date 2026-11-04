@@ -48,6 +48,8 @@ use smithay::reexports::wayland_protocols_wlr::virtual_pointer::v1::client::zwlr
 use smithay::reexports::wayland_protocols_misc::zwp_input_method_v2::client::zwp_input_method_manager_v2::ZwpInputMethodManagerV2;
 use smithay::reexports::wayland_protocols_misc::zwp_input_method_v2::client::zwp_input_method_v2::ZwpInputMethodV2;
 use smithay::reexports::wayland_protocols_misc::zwp_input_method_v2::client::zwp_input_popup_surface_v2::ZwpInputPopupSurfaceV2;
+use smithay::reexports::wayland_protocols_misc::zwp_virtual_keyboard_v1::client::zwp_virtual_keyboard_manager_v1::ZwpVirtualKeyboardManagerV1;
+use smithay::reexports::wayland_protocols_misc::zwp_virtual_keyboard_v1::client::zwp_virtual_keyboard_v1::ZwpVirtualKeyboardV1;
 use smithay::reexports::rustix::fs::{memfd_create, MemfdFlags};
 use wayland_backend::client::Backend;
 use wayland_client::globals::Global;
@@ -96,6 +98,7 @@ pub struct State {
     pub session_lock_manager: Option<ExtSessionLockManagerV1>,
     pub virtual_pointer_manager: Option<ZwlrVirtualPointerManagerV1>,
     pub virtual_pointer: Option<ZwlrVirtualPointerV1>,
+    pub virtual_keyboard_manager: Option<ZwpVirtualKeyboardManagerV1>,
     pub spbm: Option<WpSinglePixelBufferManagerV1>,
     pub shm: Option<WlShm>,
     pub text_input_manager: Option<ZwpTextInputManagerV3>,
@@ -362,6 +365,7 @@ impl Client {
             session_lock_manager: None,
             virtual_pointer_manager: None,
             virtual_pointer: None,
+            virtual_keyboard_manager: None,
             spbm: None,
             shm: None,
             text_input_manager: None,
@@ -695,6 +699,13 @@ impl State {
         self.virtual_pointer = Some(pointer.clone());
         pointer
     }
+
+    /// Creates a virtual keyboard on the first seat. It has no keymap until one is sent.
+    pub fn create_virtual_keyboard(&self) -> ZwpVirtualKeyboardV1 {
+        let manager = self.virtual_keyboard_manager.as_ref().unwrap();
+        let seat = self.seats.keys().next().unwrap();
+        manager.create_virtual_keyboard(seat, &self.qh, ())
+    }
 }
 
 impl Window {
@@ -902,6 +913,9 @@ impl Dispatch<WlRegistry, ()> for State {
                 } else if interface == ZwlrVirtualPointerManagerV1::interface().name {
                     let version = min(version, ZwlrVirtualPointerManagerV1::interface().version);
                     state.virtual_pointer_manager = Some(registry.bind(name, version, qh, ()));
+                } else if interface == ZwpVirtualKeyboardManagerV1::interface().name {
+                    let version = min(version, ZwpVirtualKeyboardManagerV1::interface().version);
+                    state.virtual_keyboard_manager = Some(registry.bind(name, version, qh, ()));
                 } else if interface == WpSinglePixelBufferManagerV1::interface().name {
                     let version = min(version, WpSinglePixelBufferManagerV1::interface().version);
                     state.spbm = Some(registry.bind(name, version, qh, ()));
@@ -1182,6 +1196,8 @@ wayland_client::delegate_noop!(State: ignore WlSubcompositor);
 wayland_client::delegate_noop!(State: ignore WlSubsurface);
 wayland_client::delegate_noop!(State: ignore XdgPositioner);
 wayland_client::delegate_noop!(State: ZwlrVirtualPointerV1);
+wayland_client::delegate_noop!(State: ZwpVirtualKeyboardManagerV1);
+wayland_client::delegate_noop!(State: ZwpVirtualKeyboardV1);
 wayland_client::delegate_noop!(State: WpSecurityContextManagerV1);
 wayland_client::delegate_noop!(State: WpSecurityContextV1);
 
