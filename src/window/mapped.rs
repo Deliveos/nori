@@ -1652,6 +1652,10 @@ impl LayoutElement for Mapped {
 
 /// Crops the span `(start, len)` to at most `max`, keeping `keep` and splitting the rest between
 /// both sides. When `keep` is longer than `max`, keeps only its first `max`.
+///
+/// The spans come from client-controlled positions, and smithay saturates their bounding boxes,
+/// so `keep` can even start past the end of the span. The math is in `i64` so that it can't
+/// overflow.
 fn crop_axis((start, len): (i32, i32), (keep_start, keep_len): (i32, i32), max: i32) -> (i32, i32) {
     let max = max.max(0);
     if len <= max {
@@ -1661,15 +1665,21 @@ fn crop_axis((start, len): (i32, i32), (keep_start, keep_len): (i32, i32), max: 
         return (keep_start, max);
     }
 
+    let [start, len, keep_start, keep_len, max] =
+        [start, len, keep_start, keep_len, max].map(i64::from);
     let extra = max - keep_len;
     let before = (keep_start - start).max(0);
     let after = (start + len - (keep_start + keep_len)).max(0);
     let take_before = before.min((extra / 2).max(extra - after));
     let take_after = after.min(extra - take_before);
     (
-        keep_start - take_before,
-        keep_len + take_before + take_after,
+        clamp_to_i32(keep_start - take_before),
+        clamp_to_i32(keep_len + take_before + take_after),
     )
+}
+
+fn clamp_to_i32(value: i64) -> i32 {
+    value.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
 }
 
 /// Cuts the span `(start, len)` to `crop`. On a side where `crop` is at the edge of `full`
@@ -1718,6 +1728,17 @@ mod tests {
         assert_eq!(crop_axis((-5000, 10100), (0, 100), 1000), (-450, 1000));
         // One side wants less than half: it gets all of it, the other side the rest.
         assert_eq!(crop_axis((-100, 16100), (0, 100), 1000), (-100, 1000));
+
+        // A span that saturated in smithay ends at -1, before the window (#288).
+        assert_eq!(
+            crop_axis((i32::MIN, i32::MAX), (0, 100), 1920),
+            (-1820, 1920)
+        );
+        // At the other end, a window at the end of the i32 range.
+        assert_eq!(
+            crop_axis((0, i32::MAX), (i32::MAX - 100, 100), 1920),
+            (i32::MAX - 1920, 1920)
+        );
     }
 
     #[test]
