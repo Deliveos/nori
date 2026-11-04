@@ -541,7 +541,27 @@ impl State {
         parent: &XdgSurface,
         gravity: xdg_positioner::Gravity,
     ) -> (WlSurface, XdgSurface, XdgPopup) {
-        self.create_popup_with(Some(parent), gravity, |_| ())
+        self.create_popup_with(Some(parent), gravity, |_| (), |_| ())
+    }
+
+    /// Creates a `width` × `height` popup at (`x`, `y`) from the parent's top-left corner, and
+    /// sends its initial commit; it maps when committed with a buffer after the configure.
+    pub fn create_popup_at(
+        &mut self,
+        parent: &XdgSurface,
+        (x, y): (i32, i32),
+        (width, height): (i32, i32),
+    ) -> (WlSurface, XdgSurface, XdgPopup) {
+        let place = |positioner: &XdgPositioner| {
+            positioner.set_size(width, height);
+            positioner.set_anchor_rect(x, y, 1, 1);
+        };
+        self.create_popup_with(
+            Some(parent),
+            xdg_positioner::Gravity::BottomRight,
+            place,
+            |_| (),
+        )
     }
 
     /// Like [`Self::create_popup()`], for a layer surface parent.
@@ -550,13 +570,14 @@ impl State {
         parent: &ZwlrLayerSurfaceV1,
         gravity: xdg_positioner::Gravity,
     ) -> (WlSurface, XdgSurface, XdgPopup) {
-        self.create_popup_with(None, gravity, |popup| parent.get_popup(popup))
+        self.create_popup_with(None, gravity, |_| (), |popup| parent.get_popup(popup))
     }
 
     fn create_popup_with(
         &mut self,
         parent: Option<&XdgSurface>,
         gravity: xdg_positioner::Gravity,
+        place: impl FnOnce(&XdgPositioner),
         set_parent: impl FnOnce(&XdgPopup),
     ) -> (WlSurface, XdgSurface, XdgPopup) {
         let surface = self.create_surface();
@@ -566,6 +587,7 @@ impl State {
         positioner.set_anchor_rect(0, 0, 1, 1);
         positioner.set_anchor(xdg_positioner::Anchor::TopLeft);
         positioner.set_gravity(gravity);
+        place(&positioner);
         let xdg_surface = xdg_wm_base.get_xdg_surface(&surface, &self.qh, PopupXdgSurface);
         let popup = xdg_surface.get_popup(parent, &positioner, &self.qh, ());
         set_parent(&popup);

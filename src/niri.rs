@@ -207,8 +207,21 @@ const CLEAR_COLOR_LOCKED: [f32; 4] = [0.3, 0.1, 0.1, 1.];
 
 /// How many screenshots can be encoded and saved at once.
 ///
-/// Each one holds a copy of its pixels until its PNG is written, about 33 MB for a 4K output.
+/// Each one holds a copy of its pixels until its PNG is written, about 33 MB for a 4K output, and
+/// up to about 97 MB for a window screenshot on a 4K output at scale 2 (see
+/// `WINDOW_SCREENSHOT_MARGIN`).
 pub const MAX_SCREENSHOTS_IN_FLIGHT: usize = 4;
+
+/// Room for what clients draw near their windows, such as shadows and popups, in a window
+/// screenshot, in logical pixels.
+///
+/// The image is at most about the output's size plus twice this on each axis, placed around the
+/// window like a window cast's area, so each side of a window as large as its output gets at least
+/// this much room when it needs it. Like the cast's area, that size is rounded up to whole logical
+/// and then physical pixels, and the image can have one more physical pixel on a side that the
+/// area doesn't cut. For a 3840 × 2160 output, that is about 4840 × 3160 pixels (61 MB) at scale 1
+/// and 5840 × 4160 pixels (97 MB) at scale 2; higher scales allow more.
+const WINDOW_SCREENSHOT_MARGIN: f64 = 500.;
 
 // We'll try to send frame callbacks at least once a second. We'll make a timer that fires once a
 // second, so with the worst timing the maximum interval between two frame callbacks for a surface
@@ -6744,6 +6757,21 @@ impl Niri {
 
         self.check_screenshots_in_flight()?;
 
+        let (size, pixels) =
+            self.render_window_screenshot(renderer, output, mapped, show_pointer)?;
+
+        self.save_screenshot(size, pixels, write_to_disk, path)
+            .context("error saving screenshot")
+    }
+
+    /// Renders `mapped` for a window screenshot, and returns the size of the image and its pixels.
+    pub fn render_window_screenshot(
+        &self,
+        renderer: &mut GlesRenderer,
+        output: &Output,
+        mapped: &Mapped,
+        show_pointer: bool,
+    ) -> anyhow::Result<(Size<i32, Physical>, Vec<u8>)> {
         let scale = Scale::from(output.current_scale().fractional_scale());
         let alpha =
             if mapped.sizing_mode().is_fullscreen() || mapped.is_ignoring_opacity_window_rule() {
@@ -6785,6 +6813,12 @@ impl Niri {
         // The pointer is not included in encompassing_geo because we don't want it to expand the
         // screenshot size.
         let geo = encompassing_geo(scale, elements.iter().skip(pointer_count));
+        // The client chooses where its subsurfaces go and how large its surfaces are, so cut the
+        // image like a window cast, with room for what clients draw near their windows, such as
+        // shadows and popups.
+        let margin = 2. * WINDOW_SCREENSHOT_MARGIN;
+        let max_size = output_size(output) + Size::from((margin, margin));
+        let geo = mapped.screenshot_area(scale, max_size, geo);
         let elements = elements.iter().rev().map(|elem| {
             RelocateRenderElement::from_element(elem, geo.loc.upscale(-1), Relocate::Relative)
         });
@@ -6797,8 +6831,7 @@ impl Niri {
             elements,
         )?;
 
-        self.save_screenshot(geo.size, pixels, write_to_disk, path)
-            .context("error saving screenshot")
+        Ok((geo.size, pixels))
     }
 
     pub fn save_screenshot(

@@ -636,6 +636,34 @@ impl Mapped {
         Rectangle::new(Point::new(x, y), Size::new(w, h)).to_physical_precise_up(scale)
     }
 
+    /// Area of a window screenshot, in the same space as [`Self::cast_bbox()`]: `drawn`, the
+    /// bounding box of what is drawn for the window, cut to the cast area that
+    /// [`Self::cast_bbox()`] gives for `max_size`.
+    ///
+    /// Popups are placed on whole physical pixels before their own size is rounded, so at a
+    /// fractional scale they can reach one pixel past the window's bounding box rounded out. On
+    /// the sides where the cast area doesn't cut into that bounding box, that pixel is kept.
+    pub fn screenshot_area(
+        &self,
+        scale: Scale<f64>,
+        max_size: Size<f64, Logical>,
+        drawn: Rectangle<i32, Physical>,
+    ) -> Rectangle<i32, Physical> {
+        let full = self.window.bbox_with_popups().to_physical_precise_up(scale);
+        let crop = self.cast_bbox(scale, max_size);
+        let (x, w) = cut_span(
+            (drawn.loc.x, drawn.size.w),
+            (full.loc.x, full.size.w),
+            (crop.loc.x, crop.size.w),
+        );
+        let (y, h) = cut_span(
+            (drawn.loc.y, drawn.size.h),
+            (full.loc.y, full.size.h),
+            (crop.loc.y, crop.size.h),
+        );
+        Rectangle::new(Point::new(x, y), Size::new(w, h))
+    }
+
     pub fn render_for_screen_cast<R: NiriRenderer>(
         &self,
         renderer: &mut R,
@@ -1631,6 +1659,31 @@ fn crop_axis((start, len): (i32, i32), (keep_start, keep_len): (i32, i32), max: 
     )
 }
 
+/// Cuts the span `(start, len)` to `crop`. On a side where `crop` is at the edge of `full`
+/// instead of inside it, the span may reach one more unit past it.
+fn cut_span(
+    (start, len): (i32, i32),
+    (full_start, full_len): (i32, i32),
+    (crop_start, crop_len): (i32, i32),
+) -> (i32, i32) {
+    let crop_end = crop_start.saturating_add(crop_len);
+    let full_end = full_start.saturating_add(full_len);
+    let min = if crop_start > full_start {
+        crop_start
+    } else {
+        crop_start.saturating_sub(1)
+    };
+    let max = if crop_end < full_end {
+        crop_end
+    } else {
+        crop_end.saturating_add(1)
+    };
+
+    let lo = start.max(min);
+    let hi = start.saturating_add(len).min(max);
+    (lo, hi.saturating_sub(lo).max(0))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1652,5 +1705,26 @@ mod tests {
         assert_eq!(crop_axis((-5000, 10100), (0, 100), 1000), (-450, 1000));
         // One side wants less than half: it gets all of it, the other side the rest.
         assert_eq!(crop_axis((-100, 16100), (0, 100), 1000), (-100, 1000));
+    }
+
+    #[test]
+    fn cut_span_keeps_one_more_pixel_where_nothing_is_cut() {
+        // Nothing cut: the span stays, also one pixel past the full span on either side.
+        assert_eq!(cut_span((0, 228), (0, 228), (0, 228)), (0, 228));
+        assert_eq!(cut_span((-1, 230), (0, 228), (0, 228)), (-1, 230));
+        // But not more.
+        assert_eq!(cut_span((-5, 240), (0, 228), (0, 228)), (-1, 230));
+
+        // Cut after: the span ends at the cut, and keeps its start.
+        assert_eq!(cut_span((0, 16001), (0, 16001), (0, 1000)), (0, 1000));
+        assert_eq!(cut_span((-1, 16002), (0, 16001), (0, 1000)), (-1, 1001));
+        // Cut before: the span starts at the cut, and keeps its end.
+        assert_eq!(
+            cut_span((-16000, 16101), (-16000, 16100), (-900, 1000)),
+            (-900, 1001)
+        );
+
+        // Nothing of the span inside the cut.
+        assert_eq!(cut_span((5000, 10), (0, 6000), (0, 1000)), (5000, 0));
     }
 }
