@@ -16,6 +16,7 @@ use crate::niri::State;
 use crate::render_helpers::opaque_limit::{limit_opaque_regions, MAX_OPAQUE_RECTS_PER_RENDER};
 use crate::render_helpers::{RenderCtx, RenderTarget};
 use crate::tests::client::{ClientId, LayerConfigureProps};
+use crate::utils::output_size;
 
 #[test]
 fn layer_on_removed_output_is_forgotten() {
@@ -1052,4 +1053,54 @@ fn egl_opaque_regions_are_limited_per_frame() {
     assert_eq!(all, base + 8 + 298 * 18);
     assert_eq!(limited, 18 + 8 + base);
     assert!(limited <= MAX_OPAQUE_RECTS_PER_RENDER);
+}
+
+#[test]
+fn popup_subsurface_at_i32_min_in_window_cast_area() {
+    // smithay saturates the bounding box with popups to x = i32::MIN, width i32::MAX, which ends
+    // at x = -1, before the window geometry. Cropping it around the window overflowed (#288).
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+
+    let window = f.client(id).create_window();
+    let surface = window.surface.clone();
+    window.commit();
+    f.roundtrip(id);
+    let window = f.client(id).window(&surface);
+    window.attach_new_buffer();
+    window.set_size(100, 100);
+    window.xdg_surface.set_window_geometry(0, 0, 100, 100);
+    window.ack_last_and_commit();
+    f.double_roundtrip(id);
+
+    let xdg_surface = f.client(id).window(&surface).xdg_surface.clone();
+    let (popup, _, _) = f
+        .client(id)
+        .state
+        .create_popup_at(&xdg_surface, (0, 0), (10, 10));
+    f.roundtrip(id);
+    f.client(id).state.attach_pixel_buffer(&popup);
+    popup.commit();
+    f.double_roundtrip(id);
+
+    let (_, subsurface) = f.client(id).state.create_subsurface(&popup);
+    subsurface.set_position(i32::MIN, 0);
+    popup.commit();
+    f.double_roundtrip(id);
+
+    let output = f.niri_output(1);
+    let (_, mapped) = f.niri().layout.windows().next().unwrap();
+    assert_eq!(
+        mapped.window.bbox_with_popups(),
+        Rectangle::new((i32::MIN, 0).into(), (i32::MAX, 100).into())
+    );
+    assert_eq!(
+        mapped.window.geometry(),
+        Rectangle::new((0, 0).into(), (100, 100).into())
+    );
+
+    // The window keeps its 100 px, and the rest of the output's 1920 px is taken before it.
+    let bbox = mapped.cast_bbox(Scale::from(1.), output_size(&output));
+    assert_eq!(bbox, Rectangle::new((-1820, 0).into(), (1920, 100).into()));
 }

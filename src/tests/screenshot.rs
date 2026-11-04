@@ -281,3 +281,67 @@ fn egl_window_screenshot_keeps_the_last_pixel_of_a_popup_at_a_fractional_scale()
     assert_eq!(rgba(&pixels, 229, 228, 5), [0, 0, 255, 255]);
     assert_eq!(rgba(&pixels, 229, 149, 5), GREEN);
 }
+
+/// Maps a 100 × 100 green window with a 10 × 10 blue popup at its top-left corner, and a 1 × 1
+/// subsurface of the popup at x = i32::MIN, on a 640 × 480 output with `config`, and returns the
+/// size and the pixels of a window screenshot of it.
+///
+/// smithay saturates the bounding box with popups to x = i32::MIN, width i32::MAX, which ends at
+/// x = -1, before the window geometry. Cropping it around the window overflowed (#288).
+fn screenshot_window_with_popup_subsurface_at_i32_min(
+    config: Config,
+) -> (Size<i32, Physical>, Vec<u8>) {
+    let mut f = set_up(config);
+    let id = f.add_client();
+    let surface = map_window(&mut f, id, (100, 100), [0, 255, 0]);
+
+    let xdg_surface = f.client(id).window(&surface).xdg_surface.clone();
+    let (popup, _, _) = f
+        .client(id)
+        .state
+        .create_popup_at(&xdg_surface, (0, 0), (10, 10));
+    f.roundtrip(id);
+    f.client(id)
+        .state
+        .attach_shm_buffer(&popup, 10, 10, [0, 0, 255]);
+    popup.commit();
+    f.double_roundtrip(id);
+
+    let (_, subsurface) = f.client(id).state.create_subsurface(&popup);
+    subsurface.set_position(i32::MIN, 0);
+    popup.commit();
+    f.double_roundtrip(id);
+
+    let (_, mapped) = f.niri().layout.windows().next().unwrap();
+    assert_eq!(
+        mapped.window.bbox_with_popups(),
+        Rectangle::new((i32::MIN, 0).into(), (i32::MAX, 100).into())
+    );
+
+    render_window_screenshot(&mut f)
+}
+
+#[test]
+fn egl_popup_subsurface_at_i32_min_in_window_screenshot() {
+    // The area is (-1540, 1640) logical, so it keeps the window. But the bounding box of what is
+    // drawn saturates the same way, also ending at x = -1, and the image is cut to it: x from
+    // -1540 to -1, none of the window.
+    let (size, pixels) = screenshot_window_with_popup_subsurface_at_i32_min(Config::default());
+    assert_eq!(size, Size::from((1539, 100)));
+    for x in [0, 769, 1538] {
+        assert_eq!(rgba(&pixels, 1539, x, 50), TRANSPARENT);
+    }
+}
+
+#[test]
+fn egl_popup_subsurface_at_i32_min_in_window_screenshot_below_scale_1() {
+    // At scale 0.5, what is drawn is placed in physical pixels, so the subsurface is at about
+    // i32::MIN / 2 and the bounding box doesn't saturate. The area is (-2180, 2280) logical,
+    // (-1090, 1140) physical, and the image shows the window at x = 1090 and the popup on it.
+    let config = Config::parse_mem(r#"output "headless-1" { scale 0.5; }"#).unwrap();
+    let (size, pixels) = screenshot_window_with_popup_subsurface_at_i32_min(config);
+    assert_eq!(size, Size::from((1140, 50)));
+    assert_eq!(rgba(&pixels, 1140, 1089, 25), TRANSPARENT);
+    assert_eq!(rgba(&pixels, 1140, 1092, 2), [0, 0, 255, 255]);
+    assert_eq!(rgba(&pixels, 1140, 1115, 25), GREEN);
+}
