@@ -202,7 +202,7 @@ impl State {
             };
 
             let scale = Scale::from(output.current_scale().fractional_scale());
-            let bbox = mapped.cast_bbox(scale, output_size(output));
+            let bbox = mapped.cast_bbox(scale, output_size(output), &mut cast.held_window_area);
 
             match cast.ensure_size(bbox.size) {
                 Ok(CastSizeChange::Ready) => (),
@@ -670,7 +670,7 @@ impl Niri {
                 continue;
             };
 
-            let bbox = mapped.cast_bbox(scale, output_size(output));
+            let bbox = mapped.cast_bbox(scale, output_size(output), &mut cast.held_window_area);
 
             match cast.ensure_size(bbox.size) {
                 Ok(CastSizeChange::Ready) => (),
@@ -814,7 +814,7 @@ impl Niri {
             .get(&mapped.window)
             .map(|(o, _)| o)?;
         let scale = Scale::from(output.current_scale().fractional_scale());
-        let bbox = mapped.cast_bbox(scale, output_size(output));
+        let bbox = mapped.cast_bbox(scale, output_size(output), &mut None);
         let refresh = output.current_mode().unwrap().refresh as u32;
         Some((bbox.size, refresh))
     }

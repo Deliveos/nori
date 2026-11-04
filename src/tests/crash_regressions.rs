@@ -1101,6 +1101,62 @@ fn popup_subsurface_at_i32_min_in_window_cast_area() {
     );
 
     // The window keeps its 100 px, and the rest of the output's 1920 px is taken before it.
-    let bbox = mapped.cast_bbox(Scale::from(1.), output_size(&output));
+    let bbox = mapped.cast_bbox(Scale::from(1.), output_size(&output), &mut None);
     assert_eq!(bbox, Rectangle::new((-1820, 0).into(), (1920, 100).into()));
+}
+
+#[test]
+fn held_window_cast_area_with_a_popup_subsurface_at_i32_min() {
+    // The held bounding box keeps a popup subsurface at x = i32::MIN after it moves back, and a
+    // larger limit then crops it around the window. That overflowed before #288 was fixed.
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+
+    let window = f.client(id).create_window();
+    let surface = window.surface.clone();
+    window.commit();
+    f.roundtrip(id);
+    let window = f.client(id).window(&surface);
+    window.attach_new_buffer();
+    window.set_size(1920, 100);
+    window.xdg_surface.set_window_geometry(0, 0, 1920, 100);
+    window.ack_last_and_commit();
+    f.double_roundtrip(id);
+
+    let xdg_surface = f.client(id).window(&surface).xdg_surface.clone();
+    let (popup, _, _) = f
+        .client(id)
+        .state
+        .create_popup_at(&xdg_surface, (0, 0), (10, 10));
+    f.roundtrip(id);
+    f.client(id).state.attach_pixel_buffer(&popup);
+    popup.commit();
+    f.double_roundtrip(id);
+
+    let (_, subsurface) = f.client(id).state.create_subsurface(&popup);
+    subsurface.set_position(i32::MIN, 0);
+    popup.commit();
+    f.double_roundtrip(id);
+
+    let mut held = None;
+    let mut cast_bbox = |f: &mut Fixture, max_size: (f64, f64)| {
+        let (_, mapped) = f.niri().layout.windows().next().unwrap();
+        mapped.cast_bbox(Scale::from(1.), max_size.into(), &mut held)
+    };
+    let rect = |x, w| Rectangle::new((x, 0).into(), (w, 100).into());
+
+    // The window geometry is as wide as the limit, so the crop keeps just the window.
+    assert_eq!(cast_bbox(&mut f, (1920., 1080.)), rect(0, 1920));
+
+    // The subsurface moves back, so the window shows only itself now, but the held bounding box
+    // still starts at i32::MIN. With a larger limit, as on a larger output, the held room is
+    // taken before the window.
+    subsurface.set_position(0, 0);
+    popup.commit();
+    f.double_roundtrip(id);
+    let (_, mapped) = f.niri().layout.windows().next().unwrap();
+    let logical: Rectangle<i32, Logical> = Rectangle::from_size((1920, 100).into());
+    assert_eq!(mapped.window.bbox_with_popups(), logical);
+    assert_eq!(cast_bbox(&mut f, (2560., 1440.)), rect(-640, 2560));
 }

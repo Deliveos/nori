@@ -62,6 +62,7 @@ use crate::render_helpers::{
 };
 use crate::screencasting::CastRenderElement;
 use crate::utils::{get_monotonic_time, CastSessionId, CastStreamId};
+use crate::window::mapped::HeldCastArea;
 
 mod shm_mapping;
 use shm_mapping::ShmMapping;
@@ -122,6 +123,8 @@ pub struct Cast {
     retry_count: u32,
     // Incremented once per successful frame, stored in buffer meta.
     sequence_counter: u64,
+    /// For a window cast, the area kept between frames.
+    pub held_window_area: Option<HeldCastArea>,
     inner: Rc<RefCell<CastInner>>,
 }
 
@@ -1013,6 +1016,7 @@ impl PipeWire {
             retry_redraw: None,
             retry_count: 0,
             sequence_counter: 0,
+            held_window_area: None,
             inner,
         };
         Ok(cast)
