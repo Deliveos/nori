@@ -3830,6 +3830,9 @@ mod tests {
 
         static IN_PROGRESS: AtomicBool = AtomicBool::new(false);
 
+        // The waits have no time limit, so a slow or stalled machine can't fail the test. A call
+        // that suspend_on_thread doesn't run drops its closure and so its sender, which ends the
+        // wait with an error instead of hanging.
         let (started_tx, started_rx) = mpsc::channel();
         let (finish_tx, finish_rx) = mpsc::channel::<()>();
         // Returns without waiting for the call, which blocks until finish_tx sends.
@@ -3838,15 +3841,16 @@ mod tests {
             let _ = finish_rx.recv();
             Ok(())
         });
-        started_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+        started_rx.recv().unwrap();
 
-        // A second call while the first one runs is ignored.
+        // A second call while the first one runs is ignored: its closure is dropped without
+        // running.
         let (second_tx, second_rx) = mpsc::channel();
         suspend_on_thread(&IN_PROGRESS, move || {
             second_tx.send(()).unwrap();
             Ok(())
         });
-        assert!(second_rx.recv_timeout(Duration::from_millis(100)).is_err());
+        assert_eq!(second_rx.recv(), Err(mpsc::RecvError));
 
         // After the first call returns, suspending works again.
         finish_tx.send(()).unwrap();
@@ -3858,7 +3862,7 @@ mod tests {
             third_tx.send(()).unwrap();
             Ok(())
         });
-        third_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+        third_rx.recv().unwrap();
     }
 
     #[test]
