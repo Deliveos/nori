@@ -644,6 +644,75 @@ fn huge_layer_surface_size() {
     }
 }
 
+#[test]
+fn virtual_keyboard_keymap_larger_than_its_file() {
+    use std::fs::File;
+    use std::io::Write as _;
+    use std::os::fd::{AsFd as _, OwnedFd};
+
+    use smithay::input::keyboard::xkb;
+    use smithay::reexports::rustix::fs::{memfd_create, MemfdFlags};
+    use smithay::reexports::wayland_protocols_misc::zwp_virtual_keyboard_v1::client::zwp_virtual_keyboard_v1;
+    use wayland_client::protocol::wl_keyboard::KeymapFormat;
+
+    fn keymap_file(bytes: &[u8]) -> OwnedFd {
+        let fd = memfd_create("nori-test-keymap", MemfdFlags::CLOEXEC).unwrap();
+        let mut file = File::from(fd);
+        file.write_all(bytes).unwrap();
+        file.into()
+    }
+
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+
+    let context = xkb::Context::new(xkb::CONTEXT_NO_FLAGS);
+    let flags = xkb::KEYMAP_COMPILE_NO_FLAGS;
+    let keymap = xkb::Keymap::new_from_names(&context, "", "", "us", "", None, flags).unwrap();
+    // With the terminating NUL, as clients send it.
+    let mut keymap = keymap
+        .get_as_string(xkb::KEYMAP_FORMAT_TEXT_V1)
+        .into_bytes();
+    keymap.push(0);
+    let len = u32::try_from(keymap.len()).unwrap();
+    let format = KeymapFormat::XkbV1 as u32;
+
+    // The keymap padded with spaces to the 1 MiB limit, and one byte over it.
+    const MAX_KEYMAP_SIZE: usize = 1024 * 1024;
+    let mut at_limit = keymap[..keymap.len() - 1].to_vec();
+    at_limit.resize(MAX_KEYMAP_SIZE, b' ');
+    let mut over_limit = at_limit.clone();
+    over_limit.push(b' ');
+
+    // smithay mapped `size` bytes of the keymap file, and reading the mapping past the end of a
+    // shorter file raised SIGBUS, which killed niri. The size of `u32::MAX` is also above the
+    // 1 MiB limit, and the last keymap is a real file over it.
+    let keyboard = f.client(id).state.create_virtual_keyboard();
+    keyboard.keymap(format, keymap_file(&[]).as_fd(), 4096);
+    keyboard.keymap(format, keymap_file(&keymap).as_fd(), len + 4096);
+    keyboard.keymap(format, keymap_file(&keymap).as_fd(), u32::MAX);
+    let over_limit_len = u32::try_from(over_limit.len()).unwrap();
+    keyboard.keymap(format, keymap_file(&over_limit).as_fd(), over_limit_len);
+    f.double_roundtrip(id);
+
+    // None of the keymaps was accepted, so the keyboard still has none.
+    keyboard.key(0, 30, 1);
+    let code = zwp_virtual_keyboard_v1::Error::NoKeymap as u32;
+    assert_protocol_error(&mut f, id, &keyboard, code);
+
+    // The same keymap with its real size is accepted: a key gets no protocol error. So is the one
+    // padded to the limit, so the one over it was rejected for its size.
+    for keymap in [&keymap, &at_limit] {
+        let id = f.add_client();
+        let keyboard = f.client(id).state.create_virtual_keyboard();
+        let len = u32::try_from(keymap.len()).unwrap();
+        keyboard.keymap(format, keymap_file(keymap).as_fd(), len);
+        keyboard.key(0, 30, 1);
+        keyboard.key(0, 30, 0);
+        f.double_roundtrip(id);
+    }
+}
+
 /// Sets an opaque region of `adds` separate 1×1 rects and `subtracts` 1×1 rects between them on
 /// `surface`, without committing.
 fn set_opaque_region(
@@ -1159,4 +1228,53 @@ fn held_window_cast_area_with_a_popup_subsurface_at_i32_min() {
     let logical: Rectangle<i32, Logical> = Rectangle::from_size((1920, 100).into());
     assert_eq!(mapped.window.bbox_with_popups(), logical);
     assert_eq!(cast_bbox(&mut f, (2560., 1440.)), rect(-640, 2560));
+}
+
+#[test]
+fn destroying_many_surfaces_takes_linear_time() {
+    use std::time::Duration;
+
+    use smithay::reexports::rustix::time::{clock_gettime, ClockId};
+
+    // The client and niri both run on this thread, so its CPU time is what their work costs; time
+    // when the thread isn't running doesn't count.
+    fn cpu_time() -> Duration {
+        let ts = clock_gettime(ClockId::ThreadCPUTime);
+        Duration::new(ts.tv_sec as u64, ts.tv_nsec as u32)
+    }
+
+    const COUNT: usize = 20_000;
+    // Roundtrip after each batch, so that the socket buffers don't fill up.
+    const BATCH: usize = 1000;
+
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+
+    let start = cpu_time();
+    let mut surfaces = Vec::with_capacity(COUNT);
+    for _ in 0..COUNT / BATCH {
+        for _ in 0..BATCH {
+            surfaces.push(f.client(id).state.create_surface());
+        }
+        f.roundtrip(id);
+    }
+    let create = cpu_time() - start;
+
+    let start = cpu_time();
+    for batch in surfaces.chunks(BATCH) {
+        for surface in batch {
+            surface.destroy();
+        }
+        f.roundtrip(id);
+    }
+    let destroy = cpu_time() - start;
+
+    // smithay kept every surface in a Vec and scanned it to remove each destroyed one, so
+    // destroying the surfaces took time quadratic in their number: in a debug build, more than 100
+    // times as long as creating them. With a set, it takes about as long as creating them.
+    assert!(
+        destroy < create * 10,
+        "destroying {COUNT} surfaces took {destroy:?}, creating them took {create:?}"
+    );
 }

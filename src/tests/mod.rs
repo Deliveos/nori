@@ -9,6 +9,7 @@ mod animations;
 mod binds;
 mod configure_state;
 mod crash_regressions;
+mod data_device;
 #[cfg(feature = "dbus")]
 mod display_config;
 mod floating;
