@@ -1014,7 +1014,7 @@ impl State {
                     return false;
                 }
                 let scale = Scale::from(output.current_scale().fractional_scale());
-                let size = mapped.capture_bbox(scale).size;
+                let size = mapped.capture_bbox(scale, output_size(output)).size;
                 let size = Size::<i32, BufferCoords>::from((size.w, size.h));
                 if s.constraints_size == Some(size) {
                     // The constraints match.
@@ -6403,7 +6403,7 @@ impl Niri {
                 continue;
             }
 
-            let bbox = mapped.capture_bbox(scale);
+            let bbox = mapped.capture_bbox(scale, output_size(output));
             let size = bbox.size;
             let buffer_size = Size::<_, BufferCoords>::from((size.w, size.h));
 
@@ -6700,7 +6700,7 @@ impl Niri {
                 // one.)
                 self.pointer_pos_for_window_cast(mapped)
                     .map(|(pointer_pos, win_pos)| {
-                        let bbox = mapped.capture_bbox(scale);
+                        let bbox = mapped.capture_bbox(scale, output_size(&output));
                         let buf_pos = win_pos + bbox.loc.to_f64().to_logical(scale);
                         let ipos = (pointer_pos - output_geo.loc.to_f64() - buf_pos)
                             .to_physical_precise_round(scale);

@@ -857,9 +857,15 @@ impl Mapped {
         self.is_urgent
     }
 
-    /// Returns the physical bbox needed to fit a screenshot of this window.
-    pub fn capture_bbox(&self, scale: Scale<f64>) -> Rectangle<i32, Physical> {
-        self.window.bbox_with_popups().to_physical_precise_up(scale)
+    /// Returns the area to capture of the window for ext-image-copy-capture: the area that
+    /// [`Self::cast_bbox()`] gives for `max_size` without a held area, so it is cropped around the
+    /// window like a window cast, but follows what the window shows now.
+    pub fn capture_bbox(
+        &self,
+        scale: Scale<f64>,
+        max_size: Size<f64, Logical>,
+    ) -> Rectangle<i32, Physical> {
+        self.cast_bbox(scale, max_size, &mut None)
     }
 }
 

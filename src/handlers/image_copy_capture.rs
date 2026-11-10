@@ -25,7 +25,9 @@ use wayland_backend::server::Credentials;
 
 use crate::niri::{Niri, State};
 use crate::render_helpers::{CaptureBuffer, CaptureTexture, PendingCapture};
-use crate::utils::{get_credentials_for_client, run_when_readable, CastSessionId, CastStreamId};
+use crate::utils::{
+    get_credentials_for_client, output_size, run_when_readable, CastSessionId, CastStreamId,
+};
 use crate::window::mapped::{Mapped, MappedId};
 
 /// Output capture session.
@@ -165,7 +167,7 @@ pub fn window_capture_constraints(
     output: &Output,
 ) -> BufferConstraints {
     let scale = Scale::from(output.current_scale().fractional_scale());
-    let size = mapped.capture_bbox(scale).size;
+    let size = mapped.capture_bbox(scale, output_size(output)).size;
 
     BufferConstraints {
         size: Size::from((size.w, size.h)),
