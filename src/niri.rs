@@ -5506,7 +5506,15 @@ impl Niri {
 
             self.render_for_screencopy_with_damage(renderer, output);
             self.render_for_image_copy_capture(renderer, output, target_presentation_time);
-            self.render_windows_for_image_copy_capture(renderer, output, target_presentation_time);
+            // Window captures render the window directly, so they'd bypass the lock screen.
+            // Their frames wait until unlocking redraws the outputs.
+            if !self.is_locked() {
+                self.render_windows_for_image_copy_capture(
+                    renderer,
+                    output,
+                    target_presentation_time,
+                );
+            }
             self.render_for_image_copy_cursor_capture(renderer, output, target_presentation_time);
         });
     }

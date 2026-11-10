@@ -262,8 +262,9 @@ The spawn fix is about a background thread that never finished.
     In niri, a lock request made while its VT is not active (for example a before-sleep locker while the user is on another VT) fails, because nothing is rendered, and on return the desktop is shown unlocked.
     nori keeps the session in the locking state and finishes locking after switching back to its VT ([ae2d2351](https://github.com/Deliveos/nori/commit/ae2d235147b37fb5fc704f343dcdc41a5a1e72ea); fixes [#6](https://github.com/Deliveos/nori/issues/6)).
 - **Window screencasts while locked.**
-    niri keeps rendering window screencasts while the session is locked, so they show the window behind the lock screen; monitor casts show the lock screen.
+    niri keeps rendering window screencasts and ext-image-copy captures of a window while the session is locked, so they show the window behind the lock screen; monitor casts show the lock screen.
     nori doesn't render window casts while the session is locked: not on output redraws ([5b90ed14](https://github.com/Deliveos/nori/commit/5b90ed146fd473ee84c5eb1c36af9412150cbc6c); fixes [#19](https://github.com/Deliveos/nori/issues/19)), and not on redraws that PipeWire asks for or on retargeting a dynamic cast to a window ([#137](https://github.com/Deliveos/nori/pull/137); fixes [#134](https://github.com/Deliveos/nori/issues/134)).
+    It also keeps the frames of ext-image-copy window captures until the session unlocks ([#295](https://github.com/Deliveos/nori/pull/295)).
 - **Screen transition at the lock screen.**
     niri draws a running screen transition (from `do-screen-transition`, a snapshot of the outputs taken when it ran) on top of the lock screen, and keeps it when the session locks.
     If the session locks during the transition delay (250 ms by default, up to 65535 ms with `--delay-ms`), the frames that confirm the lock to the lock screen client still show the unlocked desktop.

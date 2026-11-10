@@ -7,7 +7,7 @@ use std::io::Write as _;
 use std::os::fd::AsFd as _;
 use std::os::unix::net::UnixStream;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use calloop::EventLoop;
@@ -15,6 +15,11 @@ use calloop_wayland_source::WaylandSource;
 use single_pixel_buffer::v1::client::wp_single_pixel_buffer_manager_v1::WpSinglePixelBufferManagerV1;
 use smithay::reexports::wayland_protocols::ext::foreign_toplevel_list::v1::client::ext_foreign_toplevel_handle_v1::{self, ExtForeignToplevelHandleV1};
 use smithay::reexports::wayland_protocols::ext::foreign_toplevel_list::v1::client::ext_foreign_toplevel_list_v1::{self, ExtForeignToplevelListV1};
+use smithay::reexports::wayland_protocols::ext::image_capture_source::v1::client::ext_foreign_toplevel_image_capture_source_manager_v1::ExtForeignToplevelImageCaptureSourceManagerV1;
+use smithay::reexports::wayland_protocols::ext::image_capture_source::v1::client::ext_image_capture_source_v1::ExtImageCaptureSourceV1;
+use smithay::reexports::wayland_protocols::ext::image_copy_capture::v1::client::ext_image_copy_capture_frame_v1::{self, ExtImageCopyCaptureFrameV1};
+use smithay::reexports::wayland_protocols::ext::image_copy_capture::v1::client::ext_image_copy_capture_manager_v1::{self, ExtImageCopyCaptureManagerV1};
+use smithay::reexports::wayland_protocols::ext::image_copy_capture::v1::client::ext_image_copy_capture_session_v1::{self, ExtImageCopyCaptureSessionV1};
 use smithay::reexports::wayland_protocols::ext::session_lock::v1::client::ext_session_lock_manager_v1::ExtSessionLockManagerV1;
 use smithay::reexports::wayland_protocols::ext::session_lock::v1::client::ext_session_lock_surface_v1::{self, ExtSessionLockSurfaceV1};
 use smithay::reexports::wayland_protocols::ext::session_lock::v1::client::ext_session_lock_v1::{self, ExtSessionLockV1};
@@ -71,7 +76,7 @@ use wayland_client::protocol::wl_shm_pool::WlShmPool;
 use wayland_client::protocol::wl_subcompositor::WlSubcompositor;
 use wayland_client::protocol::wl_subsurface::WlSubsurface;
 use wayland_client::protocol::wl_surface::{self, WlSurface};
-use wayland_client::{Connection, Dispatch, Proxy as _, QueueHandle};
+use wayland_client::{Connection, Dispatch, Proxy, QueueHandle, WEnum};
 
 use crate::utils::id::IdCounter;
 
@@ -273,6 +278,25 @@ pub struct SessionLockData {
     pub finished: AtomicBool,
 }
 
+/// What an ext-image-copy-capture session has received.
+#[derive(Debug, Default)]
+pub struct ImageCopySessionData {
+    /// The buffer size of the last buffer constraints.
+    pub buffer_size: Option<(i32, i32)>,
+    /// The shm formats of the last buffer constraints.
+    pub shm_formats: Vec<wl_shm::Format>,
+    /// Whether the last buffer constraints are complete.
+    pub done: bool,
+    pub stopped: bool,
+}
+
+/// How an ext-image-copy-capture frame ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImageCopyFrameResult {
+    Ready,
+    Failed(WEnum<ext_image_copy_capture_frame_v1::FailureReason>),
+}
+
 static CLIENT_ID_COUNTER: IdCounter = IdCounter::new();
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -443,6 +467,21 @@ impl Client {
         self.registry.bind(global.name, version, &self.qh, ())
     }
 
+    fn bind_global<I>(&self) -> I
+    where
+        I: Proxy + 'static,
+        State: Dispatch<I, ()>,
+    {
+        let global = self
+            .state
+            .globals
+            .iter()
+            .find(|g| g.interface == I::interface().name)
+            .unwrap();
+        let version = min(global.version, I::interface().version);
+        self.registry.bind(global.name, version, &self.qh, ())
+    }
+
     pub fn create_window(&mut self) -> &mut Window {
         self.state.create_window()
     }
@@ -494,6 +533,61 @@ impl Client {
         }
 
         (lock, data)
+    }
+
+    /// Starts an ext-image-copy-capture session of a foreign toplevel, without the cursor.
+    pub fn capture_toplevel(
+        &mut self,
+        toplevel: &ExtForeignToplevelHandleV1,
+    ) -> (
+        ExtImageCopyCaptureSessionV1,
+        Arc<Mutex<ImageCopySessionData>>,
+    ) {
+        let source_manager: ExtForeignToplevelImageCaptureSourceManagerV1 = self.bind_global();
+        let source = source_manager.create_source(toplevel, &self.qh, ());
+        let manager: ExtImageCopyCaptureManagerV1 = self.bind_global();
+        let options = ext_image_copy_capture_manager_v1::Options::empty();
+        let data = Arc::new(Mutex::new(ImageCopySessionData::default()));
+        let session = manager.create_session(&source, options, &self.qh, data.clone());
+        source.destroy();
+        source_manager.destroy();
+        manager.destroy();
+        (session, data)
+    }
+
+    /// Captures a frame of the session into a new shm buffer.
+    ///
+    /// The buffer has the size and the first shm format of the session's buffer constraints, which
+    /// must be complete.
+    pub fn capture_frame(
+        &mut self,
+        session: &ExtImageCopyCaptureSessionV1,
+        data: &Mutex<ImageCopySessionData>,
+    ) -> Arc<Mutex<Option<ImageCopyFrameResult>>> {
+        let (width, height, format) = {
+            let data = data.lock().unwrap();
+            assert!(data.done, "the buffer constraints aren't complete");
+            let (width, height) = data.buffer_size.unwrap();
+            (width, height, data.shm_formats[0])
+        };
+
+        let stride = width * 4;
+        let fd = memfd_create("nori-test-capture", MemfdFlags::CLOEXEC).unwrap();
+        let file = File::from(fd);
+        file.set_len(u64::try_from(stride * height).unwrap())
+            .unwrap();
+
+        let shm = self.state.shm.as_ref().unwrap();
+        let pool = shm.create_pool(file.as_fd(), stride * height, &self.qh, ());
+        let buffer = pool.create_buffer(0, width, height, stride, format, &self.qh, ());
+        pool.destroy();
+
+        let result = Arc::new(Mutex::new(None));
+        let frame = session.create_frame(&self.qh, result.clone());
+        frame.attach_buffer(&buffer);
+        frame.damage_buffer(0, 0, width, height);
+        frame.capture();
+        result
     }
 }
 
@@ -1193,6 +1287,56 @@ impl Dispatch<ExtSessionLockV1, Arc<SessionLockData>> for State {
     }
 }
 
+impl Dispatch<ExtImageCopyCaptureSessionV1, Arc<Mutex<ImageCopySessionData>>> for State {
+    fn event(
+        _state: &mut Self,
+        _proxy: &ExtImageCopyCaptureSessionV1,
+        event: <ExtImageCopyCaptureSessionV1 as wayland_client::Proxy>::Event,
+        data: &Arc<Mutex<ImageCopySessionData>>,
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+        let mut data = data.lock().unwrap();
+        match event {
+            ext_image_copy_capture_session_v1::Event::BufferSize { width, height } => {
+                // New buffer constraints start with the buffer size.
+                data.buffer_size = Some((
+                    i32::try_from(width).unwrap(),
+                    i32::try_from(height).unwrap(),
+                ));
+                data.shm_formats.clear();
+                data.done = false;
+            }
+            ext_image_copy_capture_session_v1::Event::ShmFormat { format } => {
+                data.shm_formats.push(format.into_result().unwrap());
+            }
+            ext_image_copy_capture_session_v1::Event::Done => data.done = true,
+            ext_image_copy_capture_session_v1::Event::Stopped => data.stopped = true,
+            _ => (),
+        }
+    }
+}
+
+impl Dispatch<ExtImageCopyCaptureFrameV1, Arc<Mutex<Option<ImageCopyFrameResult>>>> for State {
+    fn event(
+        _state: &mut Self,
+        _proxy: &ExtImageCopyCaptureFrameV1,
+        event: <ExtImageCopyCaptureFrameV1 as wayland_client::Proxy>::Event,
+        data: &Arc<Mutex<Option<ImageCopyFrameResult>>>,
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+        let result = match event {
+            ext_image_copy_capture_frame_v1::Event::Ready => ImageCopyFrameResult::Ready,
+            ext_image_copy_capture_frame_v1::Event::Failed { reason } => {
+                ImageCopyFrameResult::Failed(reason)
+            }
+            _ => return,
+        };
+        *data.lock().unwrap() = Some(result);
+    }
+}
+
 impl Dispatch<ExtSessionLockSurfaceV1, (WlSurface, WpViewport)> for State {
     fn event(
         state: &mut Self,
@@ -1221,6 +1365,9 @@ impl Dispatch<ExtSessionLockSurfaceV1, (WlSurface, WpViewport)> for State {
 }
 
 wayland_client::delegate_noop!(State: ExtSessionLockManagerV1);
+wayland_client::delegate_noop!(State: ExtForeignToplevelImageCaptureSourceManagerV1);
+wayland_client::delegate_noop!(State: ExtImageCaptureSourceV1);
+wayland_client::delegate_noop!(State: ExtImageCopyCaptureManagerV1);
 wayland_client::delegate_noop!(State: ZwlrVirtualPointerManagerV1);
 wayland_client::delegate_noop!(State: WlDataDeviceManager);
 wayland_client::delegate_noop!(State: ignore WlDataSource);
