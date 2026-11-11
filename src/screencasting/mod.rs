@@ -174,7 +174,7 @@ impl State {
             // Window casts render the window directly, so they'd bypass the lock screen. Unlocking
             // redraws them.
             CastTarget::Window { .. } if is_locked => return,
-            CastTarget::Window { id } => *id,
+            CastTarget::Window { id } => MappedId::specific(*id),
         };
 
         // Lack of partial borrowing strikes again...
@@ -183,9 +183,9 @@ impl State {
         let mut stop = false;
         // Use a loop {} so we can break instead of early-return.
         #[allow(clippy::never_loop)]
+        #[allow(clippy::while_let_loop)]
         loop {
-            let mut windows = self.niri.layout.windows();
-            let Some((_, mapped)) = windows.find(|(_, mapped)| mapped.id().get() == id) else {
+            let Some((mapped, _)) = self.niri.find_mapped_output_by_id(id) else {
                 break;
             };
 
@@ -242,8 +242,13 @@ impl State {
                     }
                 }
 
+                let ctx = RenderCtx {
+                    renderer,
+                    target: RenderTarget::Screencast,
+                    xray: None,
+                };
                 let main_start = elements.len();
-                mapped.render_for_screen_cast(renderer, scale, bbox, &mut |elem| {
+                mapped.render_for_screen_cast(ctx, scale, bbox, &mut |elem| {
                     elements.push(CastRenderElement::from(elem))
                 });
 
@@ -489,20 +494,6 @@ impl State {
 }
 
 impl Niri {
-    pub fn refresh_mapped_cast_window_rules(&mut self) {
-        // O(N^2) but should be fine since there aren't many casts usually.
-        self.layout.with_windows_mut(|mapped, _| {
-            let id = mapped.id().get();
-            // Find regardless of cast.is_active.
-            let value = self
-                .casting
-                .casts
-                .iter()
-                .any(|cast| cast.target == (CastTarget::Window { id }));
-            mapped.set_is_window_cast_target(value);
-        });
-    }
-
     pub fn refresh_mapped_cast_outputs(&mut self) {
         let mut output_changed = vec![];
 
@@ -707,8 +698,13 @@ impl Niri {
                 }
             }
 
+            let ctx = RenderCtx {
+                renderer,
+                target: RenderTarget::Screencast,
+                xray: None,
+            };
             let main_start = elements.len();
-            mapped.render_for_screen_cast(renderer, scale, bbox, &mut |elem| {
+            mapped.render_for_screen_cast(ctx, scale, bbox, &mut |elem| {
                 elements.push(CastRenderElement::from(elem))
             });
 

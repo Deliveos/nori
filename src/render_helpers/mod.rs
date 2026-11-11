@@ -105,6 +105,14 @@ pub struct BakedBuffer<B> {
     pub dst: Option<Size<i32, Logical>>,
 }
 
+/// Buffer backed by a wl_buffer.
+#[derive(Clone)]
+pub enum CaptureBuffer {
+    // The Dmabuf that is contained inside the WlBuffer.
+    Dma(Dmabuf),
+    Shm(WlBuffer),
+}
+
 pub trait ToRenderElement {
     type RenderElement;
 
@@ -608,22 +616,24 @@ pub fn render_for_shm(
     damage_tracker: &mut OutputDamageTracker,
     texture: &mut CaptureTexture,
     buffer: &WlBuffer,
-    format: wl_shm::Format,
     elements: &[impl RenderElement<GlesRenderer>],
     states: RenderElementStates,
 ) -> anyhow::Result<PendingShmCopy> {
     let _span = tracy_client::span!();
 
+    // A window capture accepts both Xrgb8888 and Argb8888 buffers, so the format comes from the
+    // buffer.
     let (size, _scale, _transform) = damage_tracker.mode().try_into().unwrap();
+    let format = shm::with_buffer_contents(buffer, |_, pool_len, buffer_data| {
+        let format = buffer_data.format;
+        check_shm_buffer(buffer_data, pool_len, format, size).map(|_| format)
+    })
+    .context("expected shm buffer, but didn't get one")??;
     let fourcc = match format {
         wl_shm::Format::Xrgb8888 => Fourcc::Xrgb8888,
         wl_shm::Format::Argb8888 => Fourcc::Argb8888,
         _ => bail!("unsupported shm format: {format:?}"),
     };
-    shm::with_buffer_contents(buffer, |_, pool_len, buffer_data| {
-        check_shm_buffer(buffer_data, pool_len, format, size)
-    })
-    .context("expected shm buffer, but didn't get one")??;
 
     let texture = texture
         .get(renderer, size, fourcc)
@@ -780,6 +790,43 @@ fn render_elements(
     }
 
     frame.finish().context("error finishing frame")
+}
+
+impl CaptureBuffer {
+    /// Renders a frame for the buffer, with `texture` as the offscreen texture for SHM buffers.
+    ///
+    /// The frame is in the buffer once the returned capture is finished.
+    pub fn render(
+        &self,
+        renderer: &mut GlesRenderer,
+        damage_tracker: &mut OutputDamageTracker,
+        texture: &mut CaptureTexture,
+        elements: &[impl RenderElement<GlesRenderer>],
+        states: RenderElementStates,
+    ) -> anyhow::Result<PendingCapture> {
+        match self {
+            CaptureBuffer::Dma(dmabuf) => render_to_dmabuf(
+                renderer,
+                damage_tracker,
+                dmabuf.clone(),
+                0,
+                elements,
+                states,
+            )
+            .context("error rendering to dmabuf")
+            .map(PendingCapture::Dma),
+            CaptureBuffer::Shm(wl_buffer) => render_for_shm(
+                renderer,
+                damage_tracker,
+                texture,
+                wl_buffer,
+                elements,
+                states,
+            )
+            .context("error rendering for shm buffer")
+            .map(PendingCapture::Shm),
+        }
+    }
 }
 
 #[cfg(test)]

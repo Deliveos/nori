@@ -2,6 +2,8 @@ use smithay::reexports::wayland_protocols::xdg::shell::client::xdg_positioner::G
 use smithay::utils::{Logical, Physical, Rectangle, Scale, Size};
 
 use super::*;
+use crate::handlers::image_copy_capture::window_capture_constraints;
+use crate::niri::State;
 use crate::utils::output_size;
 
 /// Maps a 100 × 100 window with a subsurface at (16000, 16000) on a 1920 × 1080 output, and
@@ -11,6 +13,17 @@ fn far_subsurface_cast_bbox(
 ) -> (Rectangle<i32, Logical>, Rectangle<i32, Physical>) {
     let mut f = Fixture::new();
     f.add_output(1, (1920, 1080));
+    map_far_subsurface_window(&mut f, set_geometry);
+
+    let output = f.niri_output(1);
+    let (_, mapped) = f.niri().layout.windows().next().unwrap();
+    let geo = mapped.window.geometry();
+    let bbox = mapped.cast_bbox(Scale::from(1.), output_size(&output), &mut None);
+    (geo, bbox)
+}
+
+/// Maps a 100 × 100 window with a subsurface at (16000, 16000).
+fn map_far_subsurface_window(f: &mut Fixture, set_geometry: bool) {
     let id = f.add_client();
 
     let window = f.client(id).create_window();
@@ -32,13 +45,8 @@ fn far_subsurface_cast_bbox(
     window.commit();
     f.double_roundtrip(id);
 
-    let output = f.niri_output(1);
     let (_, mapped) = f.niri().layout.windows().next().unwrap();
     assert!(mapped.window.bbox_with_popups().size.w > 16000);
-
-    let geo = mapped.window.geometry();
-    let bbox = mapped.cast_bbox(Scale::from(1.), output_size(&output), &mut None);
-    (geo, bbox)
 }
 
 #[test]
@@ -59,6 +67,30 @@ fn window_cast_area_is_cropped_without_window_geometry() {
 
     // The cast is still at most the output's size, from the start of the window geometry.
     assert_eq!(bbox, Rectangle::from_size(Size::from((1920, 1080))));
+}
+
+#[test]
+fn egl_window_capture_area_is_cropped_like_a_cast() {
+    let mut f = Fixture::new();
+    f.niri_state().backend.headless().add_renderer().unwrap();
+    f.add_output(1, (1920, 1080));
+    map_far_subsurface_window(&mut f, true);
+
+    let output = f.niri_output(1);
+    let State { backend, niri, .. } = f.niri_state();
+    let (_, mapped) = niri.layout.windows().next().unwrap();
+
+    // An ext-image-copy capture of the window is cropped like its cast, to at most the output's
+    // size, instead of reaching the far subsurface.
+    let bbox = mapped.capture_bbox(Scale::from(1.), output_size(&output));
+    assert_eq!(bbox, Rectangle::from_size(Size::from((1920, 1080))));
+
+    let constraints = backend
+        .with_primary_renderer(|renderer| {
+            window_capture_constraints(renderer, None, mapped, &output)
+        })
+        .unwrap();
+    assert_eq!(constraints.size, Size::from((1920, 1080)));
 }
 
 #[test]

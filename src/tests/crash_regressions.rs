@@ -1,4 +1,5 @@
 use niri_config::Config;
+use smithay::backend::input::InputTime;
 use smithay::backend::renderer::damage::OutputDamageTracker;
 use smithay::backend::renderer::element::Element;
 use smithay::backend::renderer::utils::RendererSurfaceStateUserData;
@@ -157,6 +158,7 @@ fn mru_click_with_pointer_off_all_outputs() {
             filter: None,
         },
         false,
+        InputTime::now(),
     );
     assert!(
         f.niri().window_mru_ui.output().is_some(),

@@ -474,6 +474,11 @@ enum Op {
         is_fullscreen: bool,
     },
     ToggleWindowedFullscreen(#[proptest(strategy = "1..=5usize")] usize),
+    SetWindowedFullscreen {
+        #[proptest(strategy = "1..=5usize")]
+        window: usize,
+        windowed_fullscreen: bool,
+    },
     FocusColumnLeft,
     FocusColumnRight,
     FocusColumnFirst,
@@ -1110,6 +1115,15 @@ impl Op {
                     return;
                 }
                 layout.toggle_windowed_fullscreen(&id);
+            }
+            Op::SetWindowedFullscreen {
+                window,
+                windowed_fullscreen,
+            } => {
+                if !layout.has_window(&window) {
+                    return;
+                }
+                layout.set_windowed_fullscreen(&window, windowed_fullscreen);
             }
             Op::FocusColumnLeft => layout.focus_left(),
             Op::FocusColumnRight => layout.focus_right(),

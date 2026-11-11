@@ -6,7 +6,7 @@ Each entry links to the pull requests or commits that made the change and to the
 
 Pull requests that change how nori behaves compared with niri update this file in the same pull request (see [CONTRIBUTING.md](CONTRIBUTING.md#writing-pull-requests)).
 
-- **Upstream base:** nori contains upstream niri up to [a8562a1](https://github.com/niri-wm/niri/commit/a8562a1126922ed4c1c94d34c1dbb26633491d05), merged in [#268](https://github.com/Deliveos/nori/pull/268).
+- **Upstream base:** nori contains upstream niri up to [7f81a7f](https://github.com/niri-wm/niri/commit/7f81a7f77b0e93464645232bd15ba2dc43ca3782), merged in [#295](https://github.com/Deliveos/nori/pull/295).
     Later upstream commits are not in nori until the next merge (see [Upstream merges](#upstream-merges)).
 - **Older work:** the first fixes were made in an earlier repository and moved here in [#1](https://github.com/Deliveos/nori/pull/1).
     Their commit messages use that repository's issue and pull request numbers ("Fixes #N", "Merge pull request #N"), which don't match the numbers here.
@@ -42,6 +42,7 @@ Pull requests that change how nori behaves compared with niri update this file i
     - at most 16 wlr-gamma-control ramps can be read at once ([details](#gamma-reads));
     - configured output positions are clamped to ±16777216, and custom modes with zero timings are ignored ([details](#output-positions-and-custom-modes));
     - a window screencast covers at most an area the size of the window's output (rounded up to whole logical pixels, then out to whole physical pixels, so on each axis it can be larger than the output by fewer than the scale plus 2 physical pixels), also when the window itself is larger, and whatever lies outside that area is not cast ([details](#window-cast-size));
+    - an ext-image-copy capture of a window covers at most the same area as a window screencast, without the room that a screencast holds for popups that closed ([details](#window-capture-size));
     - a window screenshot covers at most an area the size of the window's output plus 1000 logical pixels on each axis (rounded like a window screencast's area, and at a fractional scale up to one physical pixel more on each side the area doesn't cut), placed like a window screencast's area without the room it holds for popups that closed, and whatever lies outside that area is not in the image ([details](#window-screenshot-size));
     - while a window opens, closes, resizes or fades in or out, nori draws it through a texture that covers at most the output's logical size (twice that for a resize) plus 500 px on each side, so what lies more than 500 logical px outside the window (or its tile) is not drawn while the animation runs (for a tiled window dragged with the mouse, while it is dragged), nor, during the opening and closing animations and the fade, part of a window larger than the output; a window larger than twice the output plus 500 px on an axis is drawn as is while it resizes ([details](#animation-texture-size));
     - DisplayConfig rejects scales that are not finite and positive ([details](#displayconfig-scale));
@@ -261,8 +262,9 @@ The spawn fix is about a background thread that never finished.
     In niri, a lock request made while its VT is not active (for example a before-sleep locker while the user is on another VT) fails, because nothing is rendered, and on return the desktop is shown unlocked.
     nori keeps the session in the locking state and finishes locking after switching back to its VT ([ae2d2351](https://github.com/Deliveos/nori/commit/ae2d235147b37fb5fc704f343dcdc41a5a1e72ea); fixes [#6](https://github.com/Deliveos/nori/issues/6)).
 - **Window screencasts while locked.**
-    niri keeps rendering window screencasts while the session is locked, so they show the window behind the lock screen; monitor casts show the lock screen.
+    niri keeps rendering window screencasts and ext-image-copy captures of a window while the session is locked, so they show the window behind the lock screen; monitor casts show the lock screen.
     nori doesn't render window casts while the session is locked: not on output redraws ([5b90ed14](https://github.com/Deliveos/nori/commit/5b90ed146fd473ee84c5eb1c36af9412150cbc6c); fixes [#19](https://github.com/Deliveos/nori/issues/19)), and not on redraws that PipeWire asks for or on retargeting a dynamic cast to a window ([#137](https://github.com/Deliveos/nori/pull/137); fixes [#134](https://github.com/Deliveos/nori/issues/134)).
+    It also keeps the frames of ext-image-copy window captures until the session unlocks ([#295](https://github.com/Deliveos/nori/pull/295)).
 - **Screen transition at the lock screen.**
     niri draws a running screen transition (from `do-screen-transition`, a snapshot of the outputs taken when it ran) on top of the lock screen, and keeps it when the session locks.
     If the session locks during the transition delay (250 ms by default, up to 65535 ms with `--delay-ms`), the frames that confirm the lock to the lock screen client still show the unlocked desktop.
@@ -442,10 +444,6 @@ The spawn fix is about a background thread that never finished.
     niri draws some elements with its own drawing code instead of smithay's, once per damage rectangle: for example borders and focus rings with rounded corners or gradients, tab indicators, shadows, the resize animation and custom open and close animations.
     Without instancing support (GLES 2 drivers that lack either of the two instancing extensions), niri draws these rectangles in batches of 10, but each batch draws one rectangle and moves on by one instead of 10, so of n = 10k + r damage rectangles (1 ≤ r ≤ 10) only the first k + r are drawn, and parts of the element are missing until a later frame repaints them.
     nori draws every rectangle, as smithay's own renderer does, and has a test for it in `src/render_helpers/shader_element.rs` ([#233](https://github.com/Deliveos/nori/pull/233); fixes [#189](https://github.com/Deliveos/nori/issues/189)).
-- **Opaque regions that add or subtract overlapping rectangles.**
-    smithay splits a surface's opaque region into pieces that don't overlap with `Rectangle::subtract_rects_many_in_place`, which its damage tracker also uses.
-    In niri's smithay version, that function can skip some rectangles after it cuts others, so the pieces can overlap, and part of an area that the client subtracted from its opaque region can stay opaque: for Add (0,0,10,10), Subtract (2,4,2,2), Subtract (6,0,2,10), the pieces add up to 80 px² instead of 76 px², and for Add (2,4,2,2), Add (6,0,2,10), Add (0,0,10,10), to 104 px² instead of 100 px². Found while reading the code; not seen in a running nori.
-    nori's smithay fork has upstream Smithay's fix (commit `2923f224`), which walks the rectangles from back to front, and `opaque_region_pieces_cover_the_region_once` in `src/tests/crash_regressions.rs` checks the pieces of both regions ([#286](https://github.com/Deliveos/nori/pull/286); fixes [#281](https://github.com/Deliveos/nori/issues/281)).
 
 ### Session
 
@@ -538,8 +536,8 @@ niri does some bookkeeping on every iteration of its event loop, even when nothi
     niri asks each window for its size four times while refreshing the IPC window list, and builds a new set of all window ids to find closed windows.
     nori asks once, and collects window ids only when a window was closed ([#59](https://github.com/Deliveos/nori/pull/59); fixes [#50](https://github.com/Deliveos/nori/issues/50), [#55](https://github.com/Deliveos/nori/issues/55)).
 - **Image-copy-capture constraints.**
-    To see whether an ext-image-copy-capture session needs new buffer constraints, niri reads the session's size through smithay's `current_constraints()`, which clones all of the constraints (the SHM and DMA-BUF format lists with their modifiers), once per iteration for each output capture session and on each refresh of each cursor capture session.
-    nori keeps the size it last sent next to each session and compares with that ([#235](https://github.com/Deliveos/nori/pull/235); fixes [#181](https://github.com/Deliveos/nori/issues/181)).
+    To see whether an ext-image-copy-capture session needs new buffer constraints, niri reads the session's size through smithay's `current_constraints()`, which clones all of the constraints (the SHM and DMA-BUF format lists with their modifiers): once per iteration for each output and window capture session, and on each redraw of an output for each cursor capture session on it that waits for a frame.
+    nori keeps the size it last sent next to each session and compares with that ([#235](https://github.com/Deliveos/nori/pull/235); fixes [#181](https://github.com/Deliveos/nori/issues/181)), also for the window capture sessions that came with the upstream merge in [#295](https://github.com/Deliveos/nori/pull/295).
 - **Dead output surfaces.**
     niri prunes dead surfaces from its outputs on every iteration; nori does it on its existing one-second timer ([#62](https://github.com/Deliveos/nori/pull/62); fixes [#56](https://github.com/Deliveos/nori/issues/56)).
 - **Configure state.**
@@ -607,6 +605,11 @@ niri does some bookkeeping on every iteration of its event loop, even when nothi
     For a 3840 × 2160 output, the image is at most about 4840 × 3160 pixels (61 MB) at scale 1 and 5840 × 4160 pixels (97 MB) at scale 2; the room is in logical pixels, so higher scales allow more.
     Where the cut leaves a side of the window's bounding box alone, the image keeps what is drawn there up to one physical pixel past the bounding box rounded out, which is everything drawn there except a surface that smithay's cached bounding box doesn't have yet (a new subsurface before its parent's commit), and except what lies past a bounding box that saturated ([details](#window-cast-size)); the pixel is for the last pixel of a popup that rounding at a fractional scale puts just past the bounding box.
     The tests are the six `egl_window_screenshot_*` tests in `src/tests/screenshot.rs` and `cut_span_keeps_one_more_pixel_where_nothing_is_cut` in `src/window/mapped.rs` ([#282](https://github.com/Deliveos/nori/pull/282); fixes [#279](https://github.com/Deliveos/nori/issues/279)).
+- <a id="window-capture-size"></a>**ext-image-copy window capture size.**
+    niri also lets ext-image-copy-capture clients capture a single window (through `ext-foreign-toplevel-image-capture-source`), and sizes that capture to the bounding box of the window's surfaces and popups, with no limit, like its [window screencasts](#window-cast-size), so the same far-away subsurface makes each frame buffer that large.
+    nori crops the capture area like a window screencast's, to at most the logical size of the window's output on each axis, but without the room that a screencast holds for popups and subsurfaces that went away: the capture follows what the window shows now, so a popup that reaches outside the window still changes its size, as in niri.
+    The buffer constraints, the rendering and the cursor position use the same area.
+    The test is `egl_window_capture_area_is_cropped_like_a_cast` in `src/tests/window_cast.rs` ([#295](https://github.com/Deliveos/nori/pull/295); part of [#165](https://github.com/Deliveos/nori/issues/165)).
 - <a id="animation-texture-size"></a>**Window animation textures.**
     niri draws a window's opening, closing and resize animations, a window's fade in or out (while it is dragged with the mouse, and in tabbed columns), and the window switcher's closing fade through an off-screen texture sized to the bounding box of everything drawn, with no limit of its own.
     A client chooses where its subsurfaces go and, with wp_viewporter, how large a surface is regardless of its buffer, and a client that doesn't set its window geometry gets the bounding box of its surfaces as the geometry, so the window itself grows with them.
@@ -645,9 +648,9 @@ niri does some bookkeeping on every iteration of its event loop, even when nothi
 ## Building and packaging
 
 - **smithay fork.**
-    niri builds smithay and smithay-drm-extras from [Smithay/smithay](https://github.com/Smithay/smithay) at `8a270232`.
-    nori builds them from [Deliveos/smithay](https://github.com/Deliveos/smithay) at `9fec9bbc`, on its `nori` branch: the same version plus the `xdg_positioner` fixes for [#90](https://github.com/Deliveos/nori/issues/90) and [#104](https://github.com/Deliveos/nori/issues/104), the negative size fixes for [#128](https://github.com/Deliveos/nori/issues/128), upstream Smithay's fix of `Rectangle::subtract_rects_many_in_place` (commit `2923f224`, cherry-picked) for [#281](https://github.com/Deliveos/nori/issues/281), reading virtual keyboard keymaps instead of mapping them, only from regular files that can be mapped and with a 1 MiB limit, for [#183](https://github.com/Deliveos/nori/issues/183), starting a drag only for the client that got the click, for [#153](https://github.com/Deliveos/nori/issues/153), and keeping the list of all surfaces in a set, for [#154](https://github.com/Deliveos/nori/issues/154).
-    Builds that fetch or vendor the dependencies, including the Nix flake, get smithay from there, so the pinned fork commits have to stay reachable from a branch or tag of the fork ([#101](https://github.com/Deliveos/nori/pull/101), [#122](https://github.com/Deliveos/nori/pull/122), [#266](https://github.com/Deliveos/nori/pull/266), [#286](https://github.com/Deliveos/nori/pull/286), [#291](https://github.com/Deliveos/nori/pull/291)).
+    niri builds smithay and smithay-drm-extras from [Smithay/smithay](https://github.com/Smithay/smithay) at `65aa86fa`.
+    nori builds them from [Deliveos/smithay](https://github.com/Deliveos/smithay) at `ea0a6680`, on its `nori` branch: the same version plus the `xdg_positioner` fixes for [#90](https://github.com/Deliveos/nori/issues/90) and [#104](https://github.com/Deliveos/nori/issues/104), the negative size fixes for [#128](https://github.com/Deliveos/nori/issues/128), reading virtual keyboard keymaps instead of mapping them, only from regular files that can be mapped and with a 1 MiB limit, for [#183](https://github.com/Deliveos/nori/issues/183), starting a drag only for the client that got the click, for [#153](https://github.com/Deliveos/nori/issues/153), and keeping the list of all surfaces in a set, for [#154](https://github.com/Deliveos/nori/issues/154).
+    Builds that fetch or vendor the dependencies, including the Nix flake, get smithay from there, so the pinned fork commits have to stay reachable from a branch or tag of the fork ([#101](https://github.com/Deliveos/nori/pull/101), [#122](https://github.com/Deliveos/nori/pull/122), [#266](https://github.com/Deliveos/nori/pull/266), [#286](https://github.com/Deliveos/nori/pull/286), [#291](https://github.com/Deliveos/nori/pull/291), [#295](https://github.com/Deliveos/nori/pull/295)).
     Switching back to upstream smithay once the fixes are there is tracked in [#105](https://github.com/Deliveos/nori/issues/105).
 - **PKGBUILD for the AUR.**
     The `niri` package in Arch's extra repository and `niri-git` in the AUR build upstream niri.
@@ -659,6 +662,8 @@ niri does some bookkeeping on every iteration of its event loop, even when nothi
 - Client-server regression tests for the crash and leak fixes ([4a000d50](https://github.com/Deliveos/nori/commit/4a000d504c9ab0fd8b7c731a004a90a68b353dd7), later extended), and a fix for one of them that failed when run with other tests ([#103](https://github.com/Deliveos/nori/pull/103); fixes [#102](https://github.com/Deliveos/nori/issues/102)).
 - Tests for foreign-toplevel close detection ([#66](https://github.com/Deliveos/nori/pull/66); fixes [#53](https://github.com/Deliveos/nori/issues/53)) and for the pointer inactivity timer ([#87](https://github.com/Deliveos/nori/pull/87); fixes [#82](https://github.com/Deliveos/nori/issues/82)).
 - Screenshot tests that need EGL carry the `egl_` prefix, so the Nix sandbox skips them ([#91](https://github.com/Deliveos/nori/pull/91); fixes [#79](https://github.com/Deliveos/nori/issues/79)), and the nix CI job fails when `nix flake check` fails; niri lets that job pass anyway ([#121](https://github.com/Deliveos/nori/pull/121); fixes [#97](https://github.com/Deliveos/nori/issues/97)).
+- `opaque_region_pieces_cover_the_region_once` in `src/tests/crash_regressions.rs` checks that smithay's `Rectangle::subtract_rects_many_in_place` cuts opaque regions that add or subtract overlapping rectangles into pieces that cover the region once.
+    nori's smithay fork took upstream Smithay's fix for that (commit `2923f224`) before niri moved to a smithay version that has it, so the fix itself is no longer a difference ([#286](https://github.com/Deliveos/nori/pull/286), [#295](https://github.com/Deliveos/nori/pull/295); fixes [#281](https://github.com/Deliveos/nori/issues/281)).
 - CI runs once per pull request commit: pushes start CI only on `main`, and a newer commit cancels the older run ([#2](https://github.com/Deliveos/nori/pull/2)); AGENTS.md and CONTRIBUTING.md describe when CI runs here ([#2](https://github.com/Deliveos/nori/pull/2), [#46](https://github.com/Deliveos/nori/pull/46)).
 
 ## Project rules
@@ -677,6 +682,7 @@ Upstream's own changes are not listed in this file.
 |---|---|---|
 | [#117](https://github.com/Deliveos/nori/pull/117) | [e19df12](https://github.com/niri-wm/niri/commit/e19df12cf81ffe805609fee497da1a097066ad2f)..[9d8f4f8](https://github.com/niri-wm/niri/commit/9d8f4f89f6a075a04ed24af5f13829d0bdba5b85) (18 commits) | 2026-10-26 |
 | [#268](https://github.com/Deliveos/nori/pull/268) | [9d8f4f8](https://github.com/niri-wm/niri/commit/9d8f4f89f6a075a04ed24af5f13829d0bdba5b85)..[a8562a1](https://github.com/niri-wm/niri/commit/a8562a1126922ed4c1c94d34c1dbb26633491d05) (20 commits) | 2026-11-03 |
+| [#295](https://github.com/Deliveos/nori/pull/295) | [a8562a1](https://github.com/niri-wm/niri/commit/a8562a1126922ed4c1c94d34c1dbb26633491d05)..[7f81a7f](https://github.com/niri-wm/niri/commit/7f81a7f77b0e93464645232bd15ba2dc43ca3782) (34 commits) | 2026-11-10 |
 
 To see the upstream commits that nori doesn't have yet, run `git fetch https://github.com/niri-wm/niri main` and then `git log --oneline HEAD..FETCH_HEAD`.
 
