@@ -248,6 +248,10 @@ impl MappedId {
         self.0
     }
 
+    pub fn specific(id: u64) -> Self {
+        Self(id)
+    }
+
     /// Converts the ID to a string that can be used as an identifier in
     /// ext_foreign_toplevel_handle_v1::identifier
     ///
@@ -748,12 +752,12 @@ impl Mapped {
 
     pub fn render_for_screen_cast<R: NiriRenderer>(
         &self,
-        renderer: &mut R,
+        ctx: RenderCtx<R>,
         scale: Scale<f64>,
         bbox: Rectangle<i32, Physical>,
         push: &mut dyn FnMut(WindowCastRenderElements<R>),
     ) {
-        let has_border_shader = BorderRenderElement::has_shader(renderer);
+        let has_border_shader = BorderRenderElement::has_shader(ctx.renderer);
         let radius = self.geometry_corner_radius();
         let window_size = self
             .size()
@@ -793,18 +797,9 @@ impl Mapped {
             WindowCastRenderElements::from(elem)
         };
 
-        self.render(
-            RenderCtx {
-                renderer,
-                target: RenderTarget::Screencast,
-                xray: None,
-            },
-            location,
-            scale,
-            1.,
-            XrayPos::default(),
-            &mut |elem| push(use_border(elem)),
-        );
+        self.render(ctx, location, scale, 1., XrayPos::default(), &mut |elem| {
+            push(use_border(elem))
+        });
     }
 
     pub fn get_focus_timestamp(&self) -> Option<Duration> {
@@ -860,6 +855,11 @@ impl Mapped {
 
     pub fn is_urgent(&self) -> bool {
         self.is_urgent
+    }
+
+    /// Returns the physical bbox needed to fit a screenshot of this window.
+    pub fn capture_bbox(&self, scale: Scale<f64>) -> Rectangle<i32, Physical> {
+        self.window.bbox_with_popups().to_physical_precise_up(scale)
     }
 }
 

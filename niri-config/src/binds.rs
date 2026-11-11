@@ -291,6 +291,24 @@ pub enum Action {
     ToggleWindowedFullscreen,
     #[knuffel(skip)]
     ToggleWindowedFullscreenById(u64),
+    SetWindowFullscreen,
+    #[knuffel(skip)]
+    SetWindowFullscreenById(u64),
+    UnsetWindowFullscreen,
+    #[knuffel(skip)]
+    UnsetWindowFullscreenById(u64),
+    SetWindowMaximizedToEdges,
+    #[knuffel(skip)]
+    SetWindowMaximizedToEdgesById(u64),
+    UnsetWindowMaximizedToEdges,
+    #[knuffel(skip)]
+    UnsetWindowMaximizedToEdgesById(u64),
+    SetWindowedFullscreen,
+    #[knuffel(skip)]
+    SetWindowedFullscreenById(u64),
+    UnsetWindowedFullscreen,
+    #[knuffel(skip)]
+    UnsetWindowedFullscreenById(u64),
     #[knuffel(skip)]
     FocusWindow(u64),
     FocusWindowInColumn(#[knuffel(argument)] u8),
@@ -527,6 +545,10 @@ pub enum Action {
     MruSetScope(MruScope),
     #[knuffel(skip)]
     MruCycleScope,
+    #[knuffel(skip)]
+    GlobalShortcutActivateAction(u32),
+    #[knuffel(skip)]
+    GlobalShortcutDeactivateAction(u32),
 
     // Doesn't look like knuffel allows gating on #[cfg(test)]...
     #[knuffel(skip)]
@@ -580,6 +602,34 @@ impl From<niri_ipc::Action> for Action {
             }
             niri_ipc::Action::ToggleWindowedFullscreen { id: Some(id) } => {
                 Self::ToggleWindowedFullscreenById(id)
+            }
+            niri_ipc::Action::SetWindowFullscreen { id: None } => Self::SetWindowFullscreen,
+            niri_ipc::Action::SetWindowFullscreen { id: Some(id) } => {
+                Self::SetWindowFullscreenById(id)
+            }
+            niri_ipc::Action::UnsetWindowFullscreen { id: None } => Self::UnsetWindowFullscreen,
+            niri_ipc::Action::UnsetWindowFullscreen { id: Some(id) } => {
+                Self::UnsetWindowFullscreenById(id)
+            }
+            niri_ipc::Action::SetWindowMaximizedToEdges { id: None } => {
+                Self::SetWindowMaximizedToEdges
+            }
+            niri_ipc::Action::SetWindowMaximizedToEdges { id: Some(id) } => {
+                Self::SetWindowMaximizedToEdgesById(id)
+            }
+            niri_ipc::Action::UnsetWindowMaximizedToEdges { id: None } => {
+                Self::UnsetWindowMaximizedToEdges
+            }
+            niri_ipc::Action::UnsetWindowMaximizedToEdges { id: Some(id) } => {
+                Self::UnsetWindowMaximizedToEdgesById(id)
+            }
+            niri_ipc::Action::SetWindowedFullscreen { id: None } => Self::SetWindowedFullscreen,
+            niri_ipc::Action::SetWindowedFullscreen { id: Some(id) } => {
+                Self::SetWindowedFullscreenById(id)
+            }
+            niri_ipc::Action::UnsetWindowedFullscreen { id: None } => Self::UnsetWindowedFullscreen,
+            niri_ipc::Action::UnsetWindowedFullscreen { id: Some(id) } => {
+                Self::UnsetWindowedFullscreenById(id)
             }
             niri_ipc::Action::FocusWindow { id } => Self::FocusWindow(id),
             niri_ipc::Action::FocusWindowInColumn { index } => Self::FocusWindowInColumn(index),
@@ -1312,6 +1362,24 @@ impl FromStr for Key {
             Trigger::Modifier(ModKey::IsoLevel5Shift)
         } else {
             let mut keysym = keysym_from_name(key, KEYSYM_CASE_INSENSITIVE);
+
+            let with_xf86;
+            let mut final_key = key;
+            if keysym.raw() == KEY_NoSymbol {
+                // If the key didn't match, try it with an XF86 prefix.
+                // This way, you can write e.g. AudioMute instead of XF86AudioMute.
+                //
+                // This is actually needed for the xdg-desktop-portal-gnome implementation of the
+                // GlobalShortcuts portal, as it will request non-XF86-prefixed names. Mutter then
+                // does this same exact prefixing:
+                // https://gitlab.gnome.org/GNOME/mutter/-/blob/b48811767189fb5446bd1b831e98271a21866e09/src/core/meta-accel-parse.c#L302-311
+                with_xf86 = format!("XF86{key}");
+                keysym = keysym_from_name(&with_xf86, KEYSYM_CASE_INSENSITIVE);
+                if keysym.raw() != KEY_NoSymbol {
+                    final_key = &with_xf86;
+                }
+            }
+
             // The keyboard event handling code can receive either
             // XF86ScreenSaver or XF86Screensaver, because there is no
             // case mapping defined between these keysyms. If we just
@@ -1334,7 +1402,7 @@ impl FromStr for Key {
             //
             // See https://github.com/niri-wm/niri/issues/1969
             if keysym == Keysym::XF86_Screensaver {
-                keysym = keysym_from_name(key, KEYSYM_NO_FLAGS);
+                keysym = keysym_from_name(final_key, KEYSYM_NO_FLAGS);
                 if keysym.raw() == KEY_NoSymbol {
                     keysym = Keysym::XF86_ScreenSaver;
                 }
@@ -1380,6 +1448,29 @@ mod tests {
         );
         assert_eq!(
             "xf86screensaver".parse::<Key>().unwrap(),
+            Key {
+                trigger: Trigger::Keysym(Keysym::XF86_ScreenSaver),
+                modifiers: Modifiers::empty(),
+            }
+        );
+
+        // And now with the auto-prepended XF86 prefix.
+        assert_eq!(
+            "ScreenSaver".parse::<Key>().unwrap(),
+            Key {
+                trigger: Trigger::Keysym(Keysym::XF86_ScreenSaver),
+                modifiers: Modifiers::empty(),
+            },
+        );
+        assert_eq!(
+            "Screensaver".parse::<Key>().unwrap(),
+            Key {
+                trigger: Trigger::Keysym(Keysym::XF86_Screensaver),
+                modifiers: Modifiers::empty(),
+            }
+        );
+        assert_eq!(
+            "screensaver".parse::<Key>().unwrap(),
             Key {
                 trigger: Trigger::Keysym(Keysym::XF86_ScreenSaver),
                 modifiers: Modifiers::empty(),

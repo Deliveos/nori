@@ -1,6 +1,7 @@
 use std::sync::atomic::Ordering;
 
 use niri_config::Action;
+use smithay::backend::input::InputTime;
 
 use super::*;
 
@@ -13,8 +14,11 @@ fn egl_screen_transition_is_dropped_when_locking() {
 
     // Like `do-screen-transition --delay-ms 10000` right before starting a lock screen. The
     // transition is a snapshot of the unlocked desktop.
-    f.niri_state()
-        .do_action(Action::DoScreenTransition(Some(10000)), false);
+    f.niri_state().do_action(
+        Action::DoScreenTransition(Some(10000)),
+        false,
+        InputTime::now(),
+    );
     assert!(f.niri().has_screen_transition());
 
     let (_lock, data) = f.client(id).lock_session();
