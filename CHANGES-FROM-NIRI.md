@@ -6,7 +6,7 @@ Each entry links to the pull requests or commits that made the change and to the
 
 Pull requests that change how nori behaves compared with niri update this file in the same pull request (see [CONTRIBUTING.md](CONTRIBUTING.md#writing-pull-requests)).
 
-- **Upstream base:** nori contains upstream niri up to [a8562a1](https://github.com/niri-wm/niri/commit/a8562a1126922ed4c1c94d34c1dbb26633491d05), merged in [#268](https://github.com/Deliveos/nori/pull/268).
+- **Upstream base:** nori contains upstream niri up to [7f81a7f](https://github.com/niri-wm/niri/commit/7f81a7f77b0e93464645232bd15ba2dc43ca3782), merged in [#295](https://github.com/Deliveos/nori/pull/295).
     Later upstream commits are not in nori until the next merge (see [Upstream merges](#upstream-merges)).
 - **Older work:** the first fixes were made in an earlier repository and moved here in [#1](https://github.com/Deliveos/nori/pull/1).
     Their commit messages use that repository's issue and pull request numbers ("Fixes #N", "Merge pull request #N"), which don't match the numbers here.
@@ -444,10 +444,6 @@ The spawn fix is about a background thread that never finished.
     niri draws some elements with its own drawing code instead of smithay's, once per damage rectangle: for example borders and focus rings with rounded corners or gradients, tab indicators, shadows, the resize animation and custom open and close animations.
     Without instancing support (GLES 2 drivers that lack either of the two instancing extensions), niri draws these rectangles in batches of 10, but each batch draws one rectangle and moves on by one instead of 10, so of n = 10k + r damage rectangles (1 ≤ r ≤ 10) only the first k + r are drawn, and parts of the element are missing until a later frame repaints them.
     nori draws every rectangle, as smithay's own renderer does, and has a test for it in `src/render_helpers/shader_element.rs` ([#233](https://github.com/Deliveos/nori/pull/233); fixes [#189](https://github.com/Deliveos/nori/issues/189)).
-- **Opaque regions that add or subtract overlapping rectangles.**
-    smithay splits a surface's opaque region into pieces that don't overlap with `Rectangle::subtract_rects_many_in_place`, which its damage tracker also uses.
-    In niri's smithay version, that function can skip some rectangles after it cuts others, so the pieces can overlap, and part of an area that the client subtracted from its opaque region can stay opaque: for Add (0,0,10,10), Subtract (2,4,2,2), Subtract (6,0,2,10), the pieces add up to 80 px² instead of 76 px², and for Add (2,4,2,2), Add (6,0,2,10), Add (0,0,10,10), to 104 px² instead of 100 px². Found while reading the code; not seen in a running nori.
-    nori's smithay fork has upstream Smithay's fix (commit `2923f224`), which walks the rectangles from back to front, and `opaque_region_pieces_cover_the_region_once` in `src/tests/crash_regressions.rs` checks the pieces of both regions ([#286](https://github.com/Deliveos/nori/pull/286); fixes [#281](https://github.com/Deliveos/nori/issues/281)).
 
 ### Session
 
@@ -540,8 +536,8 @@ niri does some bookkeeping on every iteration of its event loop, even when nothi
     niri asks each window for its size four times while refreshing the IPC window list, and builds a new set of all window ids to find closed windows.
     nori asks once, and collects window ids only when a window was closed ([#59](https://github.com/Deliveos/nori/pull/59); fixes [#50](https://github.com/Deliveos/nori/issues/50), [#55](https://github.com/Deliveos/nori/issues/55)).
 - **Image-copy-capture constraints.**
-    To see whether an ext-image-copy-capture session needs new buffer constraints, niri reads the session's size through smithay's `current_constraints()`, which clones all of the constraints (the SHM and DMA-BUF format lists with their modifiers), once per iteration for each output capture session and on each refresh of each cursor capture session.
-    nori keeps the size it last sent next to each session and compares with that ([#235](https://github.com/Deliveos/nori/pull/235); fixes [#181](https://github.com/Deliveos/nori/issues/181)).
+    To see whether an ext-image-copy-capture session needs new buffer constraints, niri reads the session's size through smithay's `current_constraints()`, which clones all of the constraints (the SHM and DMA-BUF format lists with their modifiers): once per iteration for each output and window capture session, and on each redraw of an output for each cursor capture session on it that waits for a frame.
+    nori keeps the size it last sent next to each session and compares with that ([#235](https://github.com/Deliveos/nori/pull/235); fixes [#181](https://github.com/Deliveos/nori/issues/181)), also for the window capture sessions that came with the upstream merge in [#295](https://github.com/Deliveos/nori/pull/295).
 - **Dead output surfaces.**
     niri prunes dead surfaces from its outputs on every iteration; nori does it on its existing one-second timer ([#62](https://github.com/Deliveos/nori/pull/62); fixes [#56](https://github.com/Deliveos/nori/issues/56)).
 - **Configure state.**
@@ -652,9 +648,9 @@ niri does some bookkeeping on every iteration of its event loop, even when nothi
 ## Building and packaging
 
 - **smithay fork.**
-    niri builds smithay and smithay-drm-extras from [Smithay/smithay](https://github.com/Smithay/smithay) at `8a270232`.
-    nori builds them from [Deliveos/smithay](https://github.com/Deliveos/smithay) at `9fec9bbc`, on its `nori` branch: the same version plus the `xdg_positioner` fixes for [#90](https://github.com/Deliveos/nori/issues/90) and [#104](https://github.com/Deliveos/nori/issues/104), the negative size fixes for [#128](https://github.com/Deliveos/nori/issues/128), upstream Smithay's fix of `Rectangle::subtract_rects_many_in_place` (commit `2923f224`, cherry-picked) for [#281](https://github.com/Deliveos/nori/issues/281), reading virtual keyboard keymaps instead of mapping them, only from regular files that can be mapped and with a 1 MiB limit, for [#183](https://github.com/Deliveos/nori/issues/183), starting a drag only for the client that got the click, for [#153](https://github.com/Deliveos/nori/issues/153), and keeping the list of all surfaces in a set, for [#154](https://github.com/Deliveos/nori/issues/154).
-    Builds that fetch or vendor the dependencies, including the Nix flake, get smithay from there, so the pinned fork commits have to stay reachable from a branch or tag of the fork ([#101](https://github.com/Deliveos/nori/pull/101), [#122](https://github.com/Deliveos/nori/pull/122), [#266](https://github.com/Deliveos/nori/pull/266), [#286](https://github.com/Deliveos/nori/pull/286), [#291](https://github.com/Deliveos/nori/pull/291)).
+    niri builds smithay and smithay-drm-extras from [Smithay/smithay](https://github.com/Smithay/smithay) at `65aa86fa`.
+    nori builds them from [Deliveos/smithay](https://github.com/Deliveos/smithay) at `ea0a6680`, on its `nori` branch: the same version plus the `xdg_positioner` fixes for [#90](https://github.com/Deliveos/nori/issues/90) and [#104](https://github.com/Deliveos/nori/issues/104), the negative size fixes for [#128](https://github.com/Deliveos/nori/issues/128), reading virtual keyboard keymaps instead of mapping them, only from regular files that can be mapped and with a 1 MiB limit, for [#183](https://github.com/Deliveos/nori/issues/183), starting a drag only for the client that got the click, for [#153](https://github.com/Deliveos/nori/issues/153), and keeping the list of all surfaces in a set, for [#154](https://github.com/Deliveos/nori/issues/154).
+    Builds that fetch or vendor the dependencies, including the Nix flake, get smithay from there, so the pinned fork commits have to stay reachable from a branch or tag of the fork ([#101](https://github.com/Deliveos/nori/pull/101), [#122](https://github.com/Deliveos/nori/pull/122), [#266](https://github.com/Deliveos/nori/pull/266), [#286](https://github.com/Deliveos/nori/pull/286), [#291](https://github.com/Deliveos/nori/pull/291), [#295](https://github.com/Deliveos/nori/pull/295)).
     Switching back to upstream smithay once the fixes are there is tracked in [#105](https://github.com/Deliveos/nori/issues/105).
 - **PKGBUILD for the AUR.**
     The `niri` package in Arch's extra repository and `niri-git` in the AUR build upstream niri.
@@ -666,6 +662,8 @@ niri does some bookkeeping on every iteration of its event loop, even when nothi
 - Client-server regression tests for the crash and leak fixes ([4a000d50](https://github.com/Deliveos/nori/commit/4a000d504c9ab0fd8b7c731a004a90a68b353dd7), later extended), and a fix for one of them that failed when run with other tests ([#103](https://github.com/Deliveos/nori/pull/103); fixes [#102](https://github.com/Deliveos/nori/issues/102)).
 - Tests for foreign-toplevel close detection ([#66](https://github.com/Deliveos/nori/pull/66); fixes [#53](https://github.com/Deliveos/nori/issues/53)) and for the pointer inactivity timer ([#87](https://github.com/Deliveos/nori/pull/87); fixes [#82](https://github.com/Deliveos/nori/issues/82)).
 - Screenshot tests that need EGL carry the `egl_` prefix, so the Nix sandbox skips them ([#91](https://github.com/Deliveos/nori/pull/91); fixes [#79](https://github.com/Deliveos/nori/issues/79)), and the nix CI job fails when `nix flake check` fails; niri lets that job pass anyway ([#121](https://github.com/Deliveos/nori/pull/121); fixes [#97](https://github.com/Deliveos/nori/issues/97)).
+- `opaque_region_pieces_cover_the_region_once` in `src/tests/crash_regressions.rs` checks that smithay's `Rectangle::subtract_rects_many_in_place` cuts opaque regions that add or subtract overlapping rectangles into pieces that cover the region once.
+    nori's smithay fork took upstream Smithay's fix for that (commit `2923f224`) before niri moved to a smithay version that has it, so the fix itself is no longer a difference ([#286](https://github.com/Deliveos/nori/pull/286), [#295](https://github.com/Deliveos/nori/pull/295); fixes [#281](https://github.com/Deliveos/nori/issues/281)).
 - CI runs once per pull request commit: pushes start CI only on `main`, and a newer commit cancels the older run ([#2](https://github.com/Deliveos/nori/pull/2)); AGENTS.md and CONTRIBUTING.md describe when CI runs here ([#2](https://github.com/Deliveos/nori/pull/2), [#46](https://github.com/Deliveos/nori/pull/46)).
 
 ## Project rules
@@ -684,6 +682,7 @@ Upstream's own changes are not listed in this file.
 |---|---|---|
 | [#117](https://github.com/Deliveos/nori/pull/117) | [e19df12](https://github.com/niri-wm/niri/commit/e19df12cf81ffe805609fee497da1a097066ad2f)..[9d8f4f8](https://github.com/niri-wm/niri/commit/9d8f4f89f6a075a04ed24af5f13829d0bdba5b85) (18 commits) | 2026-10-26 |
 | [#268](https://github.com/Deliveos/nori/pull/268) | [9d8f4f8](https://github.com/niri-wm/niri/commit/9d8f4f89f6a075a04ed24af5f13829d0bdba5b85)..[a8562a1](https://github.com/niri-wm/niri/commit/a8562a1126922ed4c1c94d34c1dbb26633491d05) (20 commits) | 2026-11-03 |
+| [#295](https://github.com/Deliveos/nori/pull/295) | [a8562a1](https://github.com/niri-wm/niri/commit/a8562a1126922ed4c1c94d34c1dbb26633491d05)..[7f81a7f](https://github.com/niri-wm/niri/commit/7f81a7f77b0e93464645232bd15ba2dc43ca3782) (34 commits) | 2026-11-10 |
 
 To see the upstream commits that nori doesn't have yet, run `git fetch https://github.com/niri-wm/niri main` and then `git log --oneline HEAD..FETCH_HEAD`.
 
